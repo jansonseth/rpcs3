@@ -52,7 +52,7 @@ error_code sys_memory_allocate(u32 size, u64 flags, vm::ptr<u32> alloc_addr)
 		return CELL_ENOMEM;
 	}
 
-	if (const auto area = vm::reserve_map(align == 0x10000 ? vm::user64k : vm::user1m, 0, ::align(size, 0x10000000), 0x401))
+	if (const auto area = vm::reserve_map(align == 0x10000 ? vm::user64k : vm::user1m, 0, align == 0x10000 ? mem_user64k_size : mem_user1m_size, 0x401))
 	{
 		if (u32 addr = area->alloc(size, align))
 		{

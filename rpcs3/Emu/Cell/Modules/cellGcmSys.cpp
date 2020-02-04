@@ -74,23 +74,7 @@ atomic_t<u32> reserved_size = 0;
  */
 u32 gcmGetLocalMemorySize(u32 sdk_version)
 {
-	if (sdk_version >= 0x00220000)
-	{
-		return 0x0F900000; // 249MB
-	}
-	if (sdk_version >= 0x00200000)
-	{
-		return 0x0F200000; // 242MB
-	}
-	if (sdk_version >= 0x00190000)
-	{
-		return 0x0EA00000; // 234MB
-	}
-	if (sdk_version >= 0x00180000)
-	{
-		return 0x0E800000; // 232MB
-	}
-	return 0x0E000000; // 224MB
+	return mem_rsx_size;
 }
 
 CellGcmOffsetTable offsetTable;
@@ -373,7 +357,7 @@ error_code _cellGcmInitBody(ppu_thread& ppu, vm::pptr<CellGcmContextData> contex
 
 	if (!local_size && !local_addr)
 	{
-		local_size = 0xf900000; // TODO: Get sdk_version in _cellGcmFunc15 and pass it to gcmGetLocalMemorySize
+		local_size = mem_rsx_size; // TODO: Get sdk_version in _cellGcmFunc15 and pass it to gcmGetLocalMemorySize
 		local_addr = rsx::constants::local_mem_base;
 		vm::falloc(local_addr, local_size, vm::video);
 	}
@@ -383,16 +367,9 @@ error_code _cellGcmInitBody(ppu_thread& ppu, vm::pptr<CellGcmContextData> contex
 	InitOffsetTable();
 
 	const auto render = rsx::get_current_renderer();
-	if (system_mode == CELL_GCM_SYSTEM_MODE_IOMAP_512MB)
-	{
-		cellGcmSys.warning("cellGcmInit(): 512MB io address space used");
-		render->main_mem_size = 0x20000000;
-	}
-	else
-	{
-		cellGcmSys.warning("cellGcmInit(): 256MB io address space used");
-		render->main_mem_size = 0x10000000;
-	}
+
+	cellGcmSys.warning("cellGcmInit(): %dMB io address space used", mem_user1m_size / (1024 * 1024));
+	render->main_mem_size = mem_user1m_size;
 
 	if (gcmMapEaIoAddress(ioAddress, 0, ioSize, false) != CELL_OK)
 	{
@@ -915,7 +892,7 @@ error_code cellGcmAddressToOffset(u32 address, vm::ptr<u32> offset)
 	cellGcmSys.trace("cellGcmAddressToOffset(address=0x%x, offset=*0x%x)", address, offset);
 
 	// Address not on main memory or local memory
-	if (address >= 0xD0000000)
+	if (address >= rsx::constants::local_mem_base + mem_rsx_size)
 	{
 		return CELL_GCM_ERROR_FAILURE;
 	}
@@ -923,7 +900,7 @@ error_code cellGcmAddressToOffset(u32 address, vm::ptr<u32> offset)
 	u32 result;
 
 	// Address in local memory
-	if ((address >> 28) == 0xC)
+	if (address >= mem_rsx_base && address < (mem_rsx_base + mem_rsx_size))
 	{
 		result = address - rsx::constants::local_mem_base;
 	}
@@ -1023,7 +1000,7 @@ error_code cellGcmMapLocalMemory(vm::ptr<u32> address, vm::ptr<u32> size)
 {
 	cellGcmSys.warning("cellGcmMapLocalMemory(address=*0x%x, size=*0x%x)", address, size);
 
-	if (!local_addr && !local_size && vm::falloc(local_addr = rsx::constants::local_mem_base, local_size = 0xf900000 /* TODO */, vm::video))
+	if (!local_addr && !local_size && vm::falloc(local_addr = rsx::constants::local_mem_base, local_size = mem_rsx_size /* TODO */, vm::video))
 	{
 		*address = local_addr;
 		*size = local_size;
@@ -1049,7 +1026,7 @@ error_code cellGcmMapMainMemory(u32 ea, u32 size, vm::ptr<u32> offset)
 		{
 			if (unmap_count >= (size >> 20))
 			{
-				if (auto error = gcmMapEaIoAddress(io << 20, ea, size, false))
+				if (auto error = gcmMapEaIoAddress(ea, io << 20, size, false))
 				{
 					return error;
 				}

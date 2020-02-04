@@ -68,9 +68,9 @@ error_code sys_rsx_memory_allocate(vm::ptr<u32> mem_handle, vm::ptr<u64> mem_add
 {
 	sys_rsx.warning("sys_rsx_memory_allocate(mem_handle=*0x%x, mem_addr=*0x%x, size=0x%x, flags=0x%llx, a5=0x%llx, a6=0x%llx, a7=0x%llx)", mem_handle, mem_addr, size, flags, a5, a6, a7);
 
-	if (u32 addr = vm::falloc(rsx::constants::local_mem_base, size, vm::video))
+	if (u32 addr = vm::falloc(rsx::constants::local_mem_base, mem_rsx_size, vm::video))
 	{
-		g_fxo->get<lv2_rsx_config>()->memory_size = size;
+		g_fxo->get<lv2_rsx_config>()->memory_size = mem_rsx_size;
 		*mem_addr = addr;
 		*mem_handle = 0x5a5a5a5b;
 		return CELL_OK;
@@ -190,10 +190,7 @@ error_code sys_rsx_context_allocate(vm::ptr<u32> context_id, vm::ptr<u64> lpar_d
 
 	memset(&RSXIOMem, 0xFF, sizeof(RSXIOMem));
 
-	if (false/*system_mode == CELL_GCM_SYSTEM_MODE_IOMAP_512MB*/)
-		rsx::get_current_renderer()->main_mem_size = 0x20000000; //512MB
-	else
-		rsx::get_current_renderer()->main_mem_size = 0x10000000; //256MB
+	rsx::get_current_renderer()->main_mem_size = mem_user1m_size;
 
 	vm::var<sys_event_queue_attribute_t, vm::page_allocator<>> attr;
 	attr->protocol = SYS_SYNC_PRIORITY;

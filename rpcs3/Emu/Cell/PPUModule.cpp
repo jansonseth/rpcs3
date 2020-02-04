@@ -1470,7 +1470,7 @@ void ppu_load_exec(const ppu_exec_object& elf)
 		}
 
 		// Additional segment for fixed allocations
-		if (!vm::map(0x30000000, 0x10000000, 0x200))
+		if (!vm::map(0x30000000, mem_user1m_size, 0x200))
 		{
 			fmt::throw_exception("Failed to map ppc_seg's segment!" HERE);
 		}
@@ -1534,41 +1534,7 @@ void ppu_load_exec(const ppu_exec_object& elf)
 		ppu->gpr[1] -= Emu.data.size();
 	}
 
-	// Initialize memory stats (according to sdk version)
-	// TODO: This is probably wrong with vsh.self
-	u32 mem_size;
-	if (sdk_version > 0x0021FFFF)
-	{
-		mem_size = 0xD500000;
-	}
-	else if (sdk_version > 0x00192FFF)
-	{
-		mem_size = 0xD300000;
-	}
-	else if (sdk_version > 0x0018FFFF)
-	{
-		mem_size = 0xD100000;
-	}
-	else if (sdk_version > 0x0017FFFF)
-	{
-		mem_size = 0xD000000;
-	}
-	else if (sdk_version > 0x00154FFF)
-	{
-		mem_size = 0xCC00000;
-	}
-	else
-	{
-		mem_size = 0xC800000;
-	}
-
-	if (g_cfg.core.debug_console_mode)
-	{
-		// TODO: Check for all sdk versions
-		mem_size += 0xC000000;
-	}
-
-	g_fxo->init<lv2_memory_container>(mem_size);
+	g_fxo->init<lv2_memory_container>(mem_user1m_size);
 
 	ppu->cmd_push({ppu_cmd::initialize, 0});
 

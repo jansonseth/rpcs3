@@ -904,7 +904,7 @@ namespace vm
 
 	static std::shared_ptr<block_t> _find_map(u32 size, u32 align, u64 flags)
 	{
-		for (u32 addr = ::align<u32>(0x20000000, align); addr - 1 < 0xC0000000 - 1; addr += align)
+		for (u32 addr = ::align<u32>(mem_user64k_base, align); addr - 1 < mem_rsx_base - 1; addr += align)
 		{
 			if (_test_map(addr, size))
 			{
@@ -1125,13 +1125,13 @@ namespace vm
 		{
 			g_locations =
 			{
-				std::make_shared<block_t>(0x00010000, 0x1FFF0000, 0x200), // main
-				std::make_shared<block_t>(0x20000000, 0x10000000, 0x201), // user 64k pages
-				nullptr, // user 1m pages
-				nullptr, // rsx context
-				std::make_shared<block_t>(0xC0000000, 0x10000000), // video
-				std::make_shared<block_t>(0xD0000000, 0x10000000, 0x111), // stack
-				std::make_shared<block_t>(0xE0000000, 0x20000000), // SPU reserved
+				std::make_shared<block_t>(0x00010000, 0x1FFF0000, 0x200), // main (TEXT_SEGMENT_BASE_ADDR)
+			    std::make_shared<block_t>(mem_user64k_base, mem_user64k_size, 0x201), // user 64k pages
+				nullptr, // user 1m pages (OVERLAY_PPU_SPU_SHARED_SEGMENT_BASE_ADDR)
+			    nullptr, // rsx context
+				std::make_shared<block_t>(mem_rsx_base, mem_rsx_size), // video (RSX_FB_BASE_ADDR)
+			    std::make_shared<block_t>(mem_stack_base, mem_stack_size, 0x111), // stack
+				std::make_shared<block_t>(0xE0000000, 0x20000000), // SPU reserved (RAW_SPU_BASE_ADDR)
 			};
 		}
 	}

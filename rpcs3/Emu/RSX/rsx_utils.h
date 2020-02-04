@@ -5,6 +5,7 @@
 #include "Utilities/geometry.h"
 #include "Utilities/asm.h"
 #include "gcm_enums.h"
+#include "Emu/Cell/lv2/sys_memory.h"
 
 #include <memory>
 #include <bitset>
@@ -95,7 +96,7 @@ namespace rsx
 		};
 
 		// Local RSX memory base (known as constant)
-		static constexpr u32 local_mem_base = 0xC0000000;
+		static constexpr u32 local_mem_base = mem_rsx_base;
 	}
 
 	/**
@@ -714,7 +715,7 @@ namespace rsx
 	// before actually attempting to translate to the internal address. Seen happening heavily in R&C games
 	static inline u32 get_vertex_offset_from_base(u32 vert_data_base_offset, u32 vert_base_offset)
 	{
-		return (vert_data_base_offset + vert_base_offset) & 0xFFFFFFF;
+		return (vert_data_base_offset + vert_base_offset) & (mem_rsx_size - 1);
 	}
 
 	// Similar to vertex_offset_base calculation, the rsx internally adds and masks index

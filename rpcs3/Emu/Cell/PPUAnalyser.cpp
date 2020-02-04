@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include "yaml-cpp/yaml.h"
 #include "Utilities/asm.h"
+#include "Emu/Cell/lv2/sys_memory.h"
 
 const ppu_decoder<ppu_itype> s_ppu_itype;
 
@@ -811,7 +812,7 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 				}
 
 				// TODO: absolute/relative offset (approximation)
-				if (addr > 0xc0000000)
+				if (addr > mem_rsx_base)
 				{
 					addr += ptr.addr() + 8;
 				}

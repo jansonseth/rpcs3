@@ -7,6 +7,7 @@
 #include "Emu/Cell/lv2/sys_process.h"
 #include "Emu/Cell/lv2/sys_ss.h"
 #include "Emu/Cell/lv2/sys_tty.h"
+#include "Emu/Cell/lv2/sys_memory.h"
 #include "sysPrxForUser.h"
 
 LOG_CHANNEL(sysPrxForUser);
@@ -59,8 +60,7 @@ s32 sys_process_is_stack(u32 p)
 {
 	sysPrxForUser.trace("sys_process_is_stack(p=0x%x)", p);
 
-	// prx: compare high 4 bits with "0xD"
-	return (p >> 28) == 0xD;
+	return p >= mem_stack_base && p < mem_stack_base + mem_stack_size;
 }
 
 s32 sys_process_get_paramsfo(vm::ptr<char> buffer)
