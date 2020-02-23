@@ -1,9 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "stdafx.h"
 #include "gui_settings.h"
 #include "emu_settings.h"
-#include "Emu/System.h"
 
 #include "Utilities/File.h"
 #include "user_account.h"
@@ -52,6 +51,6 @@ private:
 
 	std::shared_ptr<gui_settings> m_gui_settings;
 
-	int m_sort_column;
-	bool m_sort_ascending;
+	int m_sort_column = 1;
+	bool m_sort_ascending = true;
 };

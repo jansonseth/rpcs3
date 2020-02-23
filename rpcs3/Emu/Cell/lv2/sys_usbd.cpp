@@ -4,7 +4,6 @@
 #include <queue>
 #include <thread>
 #include "Emu/Memory/vm.h"
-#include "Emu/System.h"
 
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/ErrorCodes.h"
@@ -136,7 +135,7 @@ usb_handler_thread::usb_handler_thread()
 		return;
 
 	// look if any device which we could be interested in is actually connected
-	libusb_device** list;
+	libusb_device** list = nullptr;
 	ssize_t ndev = libusb_get_device_list(ctx, &list);
 
 	bool found_skylander = false;
@@ -191,8 +190,7 @@ usb_handler_thread::usb_handler_thread()
 		check_device(0x046D, 0xC220, 0xC220, "buzzer9");
 	}
 
-	if (ndev > 0)
-		libusb_free_device_list(list, 1);
+	libusb_free_device_list(list, 1);
 
 	if (!found_skylander)
 	{
@@ -363,9 +361,12 @@ void usb_handler_thread::check_devices_vs_ldds()
 {
 	for (const auto& dev : usb_devices)
 	{
+		if (dev->assigned_number)
+			continue;
+		
 		for (const auto& ldd : ldds)
 		{
-			if (dev->device._device.idVendor == ldd.id_vendor && dev->device._device.idProduct >= ldd.id_product_min && dev->device._device.idProduct <= ldd.id_product_max && !dev->assigned_number)
+			if (dev->device._device.idVendor == ldd.id_vendor && dev->device._device.idProduct >= ldd.id_product_min && dev->device._device.idProduct <= ldd.id_product_max)
 			{
 				if (!dev->open_device())
 				{
@@ -381,7 +382,6 @@ void usb_handler_thread::check_devices_vs_ldds()
 				handled_devices.emplace(dev_counter, std::pair(UsbInternalDevice{0x00, dev_counter, 0x02, 0x40}, dev));
 				send_message(SYS_USBD_ATTACH, dev_counter);
 				dev_counter++;
-				return;
 			}
 		}
 	}
@@ -638,7 +638,7 @@ error_code sys_usbd_receive_event(ppu_thread& ppu, u32 handle, vm::ptr<u64> arg1
 			// hack for Guitar Hero Live
 			// Attaching the device too fast seems to result in a nullptr along the way
 			if (*arg1 == SYS_USBD_ATTACH)
-				lv2_obj::wait_timeout(5000);
+				lv2_obj::sleep(ppu), lv2_obj::wait_timeout(5000);
 
 			return CELL_OK;
 		}
@@ -660,6 +660,10 @@ error_code sys_usbd_receive_event(ppu_thread& ppu, u32 handle, vm::ptr<u64> arg1
 	*arg1 = ppu.gpr[4];
 	*arg2 = ppu.gpr[5];
 	*arg3 = ppu.gpr[6];
+
+	if (*arg1 == SYS_USBD_ATTACH)
+		lv2_obj::sleep(ppu), lv2_obj::wait_timeout(5000);
+
 	return CELL_OK;
 }
 

@@ -7,10 +7,12 @@
 #include "Emu/Memory/vm_ptr.h"
 #include "Utilities/File.h"
 
+struct lv2_memory_container;
+
 enum : s32
 {
 	SYS_SPU_THREAD_GROUP_TYPE_NORMAL                = 0x00,
-	SYS_SPU_THREAD_GROUP_TYPE_SEQUENTIAL            = 0x01,
+	//SYS_SPU_THREAD_GROUP_TYPE_SEQUENTIAL            = 0x01, doesn't exist
 	SYS_SPU_THREAD_GROUP_TYPE_SYSTEM                = 0x02,
 	SYS_SPU_THREAD_GROUP_TYPE_MEMORY_FROM_CONTAINER = 0x04,
 	SYS_SPU_THREAD_GROUP_TYPE_NON_CONTEXT           = 0x08,
@@ -131,16 +133,16 @@ struct sys_spu_image
 
 		for (const auto& phdr : phdrs)
 		{
-			if (phdr.p_type != 1 && phdr.p_type != 4)
+			if (phdr.p_type != 1u && phdr.p_type != 4u)
 			{
 				return -1;
 			}
 
-			if (phdr.p_type == 1 && phdr.p_filesz != phdr.p_memsz && phdr.p_filesz)
+			if (phdr.p_type == 1u && phdr.p_filesz != phdr.p_memsz && phdr.p_filesz)
 			{
 				num_segs += 2;
 			}
-			else if (phdr.p_type == 1 || CountInfo)
+			else if (phdr.p_type == 1u || CountInfo)
 			{
 				num_segs += 1;
 			}
@@ -156,7 +158,7 @@ struct sys_spu_image
 
 		for (const auto& phdr : phdrs)
 		{
-			if (phdr.p_type == 1)
+			if (phdr.p_type == 1u)
 			{
 				if (phdr.p_filesz)
 				{
@@ -186,7 +188,7 @@ struct sys_spu_image
 					seg->addr = 0;
 				}
 			}
-			else if (WriteInfo && phdr.p_type == 4)
+			else if (WriteInfo && phdr.p_type == 4u)
 			{
 				if (num_segs >= nsegs)
 				{
@@ -198,7 +200,7 @@ struct sys_spu_image
 				seg->size = 0x20;
 				seg->addr = static_cast<u32>(phdr.p_offset + 0x14 + src);
 			}
-			else if (phdr.p_type != 4)
+			else if (phdr.p_type != 4u)
 			{
 				return -1;
 			}
@@ -223,9 +225,13 @@ struct lv2_spu_image : lv2_obj
 	static const u32 id_base = 0x22000000;
 
 	const u32 e_entry;
+	const vm::ptr<sys_spu_segment> segs;
+	const s32 nsegs;
 
-	lv2_spu_image(u32 entry)
+	lv2_spu_image(u32 entry, vm::ptr<sys_spu_segment> segs, s32 nsegs)
 		: e_entry(entry)
+		, segs(segs)
+		, nsegs(nsegs)
 	{
 	}
 };
@@ -239,8 +245,10 @@ struct lv2_spu_group
 	const std::string name;
 	const u32 id;
 	const u32 max_num;
+	const u32 mem_size;
 	const s32 type; // SPU Thread Group Type
-	const u32 ct; // Memory Container Id
+	lv2_memory_container* const ct; // Memory Container
+	const bool has_scheduler_context;
 	u32 max_run;
 
 	shared_mutex mutex;
@@ -264,15 +272,17 @@ struct lv2_spu_group
 	std::weak_ptr<lv2_event_queue> ep_exception; // TODO: SYS_SPU_THREAD_GROUP_EVENT_EXCEPTION
 	std::weak_ptr<lv2_event_queue> ep_sysmodule; // TODO: SYS_SPU_THREAD_GROUP_EVENT_SYSTEM_MODULE
 
-	lv2_spu_group(std::string name, u32 num, s32 prio, s32 type, u32 ct)
-		: id(idm::last_id())
-		, name(name)
+	lv2_spu_group(std::string name, u32 num, s32 prio, s32 type, lv2_memory_container* ct, bool uses_scheduler, u32 mem_size)
+		: name(std::move(name))
+		, id(idm::last_id())
 		, max_num(num)
+		, mem_size(mem_size)
+		, type(type)
+		, ct(ct)
+		, has_scheduler_context(uses_scheduler)
 		, max_run(num)
 		, init(0)
 		, prio(prio)
-		, type(type)
-		, ct(ct)
 		, run_state(SPU_THREAD_GROUP_STATUS_NOT_INITIALIZED)
 		, exit_status(0)
 		, join_state(0)

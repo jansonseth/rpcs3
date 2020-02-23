@@ -27,38 +27,32 @@
 extern u64 get_guest_system_time();
 extern u64 get_system_time();
 
-struct RSXIOTable
-{
-	atomic_t<u16> ea[4096];
-	atomic_t<u16> io[3072];
-
-	// try to get the real address given a mapped address
-	// return non zero on success
-	inline u32 RealAddr(u32 offs)
-	{
-		u32 result = this->ea[offs >> 20].load();
-
-		if (static_cast<s16>(result) < 0)
-		{
-			return 0;
-		}
-
-		result <<= 20; result |= (offs & 0xFFFFF);
-
-		ASSUME(result != 0);
-
-		return result;
-	}
-};
-
 extern bool user_asked_for_frame_capture;
 extern bool capture_current_frame;
 extern rsx::frame_trace_data frame_debug;
 extern rsx::frame_capture_data frame_capture;
-extern RSXIOTable RSXIOMem;
 
 namespace rsx
 {
+	struct rsx_iomap_table
+	{
+		std::array<atomic_t<u32>, 4096> ea;
+		std::array<atomic_t<u32>, 4096> io;
+
+		rsx_iomap_table() noexcept
+		{
+			std::fill(ea.begin(), ea.end(), -1);
+			std::fill(io.begin(), io.end(), -1);
+		}
+
+		// Try to get the real address given a mapped address
+		// Returns -1 on failure
+		u32 get_addr(u32 offs) const noexcept
+		{
+			return this->ea[offs >> 20] | (offs & 0xFFFFF);
+		}
+	};
+
 	enum framebuffer_creation_context : u8
 	{
 		context_draw = 0,
@@ -112,7 +106,8 @@ namespace rsx
 
 	u32 get_vertex_type_size_on_host(vertex_base_type type, u32 size);
 
-	u32 get_address(u32 offset, u32 location);
+	// TODO: Replace with std::source_location in c++20
+	u32 get_address(u32 offset, u32 location, const char* from);
 
 	struct tiled_region
 	{
@@ -196,7 +191,7 @@ namespace rsx
 
 			for (const auto &attrib : locations)
 			{
-				if (LIKELY(attrib.frequency <= 1))
+				if (attrib.frequency <= 1) [[likely]]
 				{
 					_max_index = max_index;
 				}
@@ -538,7 +533,7 @@ namespace rsx
 			while (!buffer_queue.empty());
 
 			// Need to observe this happening in the wild
-			LOG_ERROR(RSX, "Display queue was discarded while not empty!");
+			rsx_log.error("Display queue was discarded while not empty!");
 			return false;
 		}
 	};
@@ -602,13 +597,14 @@ namespace rsx
 
 	public:
 		RsxDmaControl* ctrl = nullptr;
+		rsx_iomap_table iomap_table;
 		u32 restore_point = 0;
-		atomic_t<bool> external_interrupt_lock{ false };
+		atomic_t<u32> external_interrupt_lock{ 0 };
 		atomic_t<bool> external_interrupt_ack{ false };
 		void flush_fifo();
 		void recover_fifo();
-		void fifo_wake_delay(u64 div = 1);
-		u32 get_fifo_cmd();
+		static void fifo_wake_delay(u64 div = 1);
+		u32 get_fifo_cmd() const;
 
 		// Performance approximation counters
 		struct
@@ -903,6 +899,7 @@ namespace rsx
 
 		void pause();
 		void unpause();
+		void wait_pause();
 
 		// Get RSX approximate load in %
 		u32 get_load();

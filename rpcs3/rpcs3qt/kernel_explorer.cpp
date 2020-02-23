@@ -1,6 +1,4 @@
 ﻿#include "stdafx.h"
-#include "Emu/Memory/vm.h"
-#include "Emu/System.h"
 
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUThread.h"
@@ -25,6 +23,10 @@
 #include "Emu/Cell/lv2/sys_fs.h"
 
 #include "kernel_explorer.h"
+
+#include <QVBoxLayout>
+#include <QPushButton>
+#include <QHeaderView>
 
 kernel_explorer::kernel_explorer(QWidget* parent) : QDialog(parent)
 {
@@ -108,7 +110,7 @@ void kernel_explorer::Update()
 		}
 	};
 
-	auto l_addTreeChild = [=](QTreeWidgetItem *parent, QString text)
+	auto l_addTreeChild = [this](QTreeWidgetItem *parent, QString text)
 	{
 		QTreeWidgetItem *treeItem = new QTreeWidgetItem();
 		treeItem->setText(0, text);

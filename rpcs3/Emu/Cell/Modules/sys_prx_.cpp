@@ -1,12 +1,11 @@
-#include "stdafx.h"
-#include "Emu/System.h"
+﻿#include "stdafx.h"
 #include "Emu/Cell/PPUModule.h"
 
 #include "Emu/Cell/lv2/sys_lwmutex.h"
 #include "Emu/Cell/lv2/sys_prx.h"
 #include "sysPrxForUser.h"
 
-extern logs::channel sysPrxForUser;
+LOG_CHANNEL(sysPrxForUser);
 
 extern vm::gvar<sys_lwmutex_t> g_ppu_prx_lwm;
 
@@ -19,13 +18,13 @@ static auto convert_path_list(vm::cpptr<char> path_list, s32 count)
 // Execute start or stop module function
 static void entryx(ppu_thread& ppu, vm::ptr<sys_prx_start_stop_module_option_t> opt, u32 args, vm::ptr<void> argp, vm::ptr<s32> res)
 {
-	if (opt->entry2.addr() != -1)
+	if (opt->entry2.addr() != umax)
 	{
 		*res = opt->entry2(ppu, opt->entry, args, argp);
 		return;
 	}
 
-	if (opt->entry.addr() != -1)
+	if (opt->entry.addr() != umax)
 	{
 		*res = opt->entry(ppu, args, argp);
 		return;

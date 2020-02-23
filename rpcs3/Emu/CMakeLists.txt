@@ -1,8 +1,11 @@
 ﻿add_library(rpcs3_emu
 	IdManager.cpp
 	System.cpp
+	system_config.cpp
+	system_config_types.cpp
 	VFS.cpp
 	GDB.cpp
+	title.cpp
 )
 
 target_link_libraries(rpcs3_emu
@@ -89,6 +92,7 @@ target_sources(rpcs3_emu PRIVATE
 # Audio
 target_sources(rpcs3_emu PRIVATE
 	Audio/AudioDumper.cpp
+	Audio/AudioBackend.cpp
 	Audio/AL/OpenALBackend.cpp
 )
 
@@ -111,13 +115,12 @@ if(USE_FAUDIO AND SDL2_FOUND AND NOT SDL2_VERSION VERSION_LESS 2.0.9)
 endif()
 
 if(WIN32)
+	target_include_directories(rpcs3_emu PUBLIC "${RPCS3_SRC_DIR}/../3rdparty/XAudio2Redist/include")
+	target_link_libraries(rpcs3_emu PRIVATE "${RPCS3_SRC_DIR}/../3rdparty/XAudio2Redist/libs/xaudio2_9redist.lib")
+	set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DELAYLOAD:xaudio2_9redist.dll")
 	target_sources(rpcs3_emu PRIVATE
-		Audio/XAudio2/XAudio27Backend.cpp
-		Audio/XAudio2/XAudio28Backend.cpp
 		Audio/XAudio2/XAudio2Backend.cpp
 	)
-	# Slimmed down version of minidx9 for XAudio2_7 only
-	include_directories(BEFORE "${RPCS3_SRC_DIR}/../3rdparty/XAudio2_7")
 endif()
 
 target_link_libraries(rpcs3_emu
@@ -143,7 +146,11 @@ target_sources(rpcs3_emu PRIVATE
 	Cell/SPURecompiler.cpp
 	Cell/SPUThread.cpp
 	Cell/lv2/lv2.cpp
+	Cell/lv2/sys_bdemu.cpp
+	Cell/lv2/sys_btsetting.cpp
 	Cell/lv2/sys_cond.cpp
+	Cell/lv2/sys_console.cpp
+	Cell/lv2/sys_crypto_engine.cpp
 	Cell/lv2/sys_config.cpp
 	Cell/lv2/sys_dbg.cpp
 	Cell/lv2/sys_event.cpp
@@ -151,7 +158,9 @@ target_sources(rpcs3_emu PRIVATE
 	Cell/lv2/sys_fs.cpp
 	Cell/lv2/sys_gamepad.cpp
 	Cell/lv2/sys_gpio.cpp
+	Cell/lv2/sys_hid.cpp
 	Cell/lv2/sys_interrupt.cpp
+	Cell/lv2/sys_io.cpp
 	Cell/lv2/sys_lwcond.cpp
 	Cell/lv2/sys_lwmutex.cpp
 	Cell/lv2/sys_memory.cpp
@@ -163,14 +172,18 @@ target_sources(rpcs3_emu PRIVATE
 	Cell/lv2/sys_process.cpp
 	Cell/lv2/sys_prx.cpp
 	Cell/lv2/sys_rsx.cpp
+	Cell/lv2/sys_rsxaudio.cpp
 	Cell/lv2/sys_rwlock.cpp
 	Cell/lv2/sys_semaphore.cpp
 	Cell/lv2/sys_spu.cpp
+	Cell/lv2/sys_sm.cpp
 	Cell/lv2/sys_ss.cpp
+	Cell/lv2/sys_storage.cpp
 	Cell/lv2/sys_time.cpp
 	Cell/lv2/sys_timer.cpp
 	Cell/lv2/sys_trace.cpp
 	Cell/lv2/sys_tty.cpp
+	Cell/lv2/sys_uart.cpp
 	Cell/lv2/sys_usbd.cpp
 	Cell/lv2/sys_vm.cpp
 	Cell/Modules/cellAdec.cpp
@@ -178,6 +191,7 @@ target_sources(rpcs3_emu PRIVATE
 	Cell/Modules/cellAtracMulti.cpp
 	Cell/Modules/cellAudio.cpp
 	Cell/Modules/cellAudioOut.cpp
+	Cell/Modules/cellAuthDialog.cpp
 	Cell/Modules/cellAvconfExt.cpp
 	Cell/Modules/cellBgdl.cpp
 	Cell/Modules/cellCamera.cpp
@@ -285,7 +299,7 @@ target_sources(rpcs3_emu PRIVATE
 	Cell/Modules/StaticHLE.cpp
 	Cell/Modules/sys_game.cpp
 	Cell/Modules/sys_heap.cpp
-	Cell/Modules/sys_io.cpp
+	Cell/Modules/sys_io_.cpp
 	Cell/Modules/sys_libc_.cpp
 	Cell/Modules/sys_libc.cpp
 	Cell/Modules/sys_lv2dbg.cpp
@@ -327,6 +341,7 @@ target_link_libraries(rpcs3_emu
 
 # Io
 target_sources(rpcs3_emu PRIVATE
+	Io/pad_config.cpp
 	Io/KeyboardHandler.cpp
 	Io/PadHandler.cpp
 	Io/usb_device.cpp
@@ -362,7 +377,7 @@ target_sources(rpcs3_emu PRIVATE
 	RSX/Null/NullGSRender.cpp
 	RSX/Overlays/overlay_animation.cpp
 	RSX/Overlays/overlay_edit_text.cpp
-	RSX/Overlays/overlay_font.cpp
+	RSX/Overlays/overlay_fonts.cpp
 	RSX/Overlays/overlay_list_view.cpp
 	RSX/Overlays/overlay_message_dialog.cpp
 	RSX/Overlays/overlay_osk.cpp
@@ -421,11 +436,13 @@ target_link_libraries(rpcs3_emu
 )
 
 
-# Setup cotire
-option(UNITY_BUILD_EMU "Use unity build for rpcs3_emu target" OFF)
+if (USE_COTIRE)
+	# Setup cotire
+	option(UNITY_BUILD_EMU "Use unity build for rpcs3_emu target" OFF)
 
-set_target_properties(rpcs3_emu PROPERTIES
-	COTIRE_CXX_PREFIX_HEADER_INIT "${RPCS3_SRC_DIR}/stdafx.h"
-	COTIRE_ADD_UNITY_BUILD ${UNITY_BUILD_EMU})
+	set_target_properties(rpcs3_emu PROPERTIES
+		COTIRE_CXX_PREFIX_HEADER_INIT "${RPCS3_SRC_DIR}/stdafx.h"
+		COTIRE_ADD_UNITY_BUILD ${UNITY_BUILD_EMU})
 
-cotire(rpcs3_emu)
+	cotire(rpcs3_emu)
+endif()

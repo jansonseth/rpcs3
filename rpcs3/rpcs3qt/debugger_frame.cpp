@@ -1,5 +1,7 @@
-#include "debugger_frame.h"
+﻿#include "debugger_frame.h"
 #include "qt_utils.h"
+#include "Emu/System.h"
+#include "Emu/IdManager.h"
 
 #include <QKeyEvent>
 #include <QScrollBar>
@@ -98,15 +100,15 @@ debugger_frame::debugger_frame(std::shared_ptr<gui_settings> settings, QWidget *
 	connect(m_go_to_addr, &QAbstractButton::clicked, this, &debugger_frame::ShowGotoAddressDialog);
 	connect(m_go_to_pc, &QAbstractButton::clicked, this, &debugger_frame::ShowPC);
 
-	connect(m_btn_capture, &QAbstractButton::clicked, [=]()
+	connect(m_btn_capture, &QAbstractButton::clicked, [this]()
 	{
 		user_asked_for_frame_capture = true;
 	});
 
 	connect(m_btn_step, &QAbstractButton::clicked, this, &debugger_frame::DoStep);
-	connect(m_btn_step_over, &QAbstractButton::clicked, [=]() { DoStep(true); });
+	connect(m_btn_step_over, &QAbstractButton::clicked, [this]() { DoStep(true); });
 
-	connect(m_btn_run, &QAbstractButton::clicked, [=]()
+	connect(m_btn_run, &QAbstractButton::clicked, [this]()
 	{
 		if (const auto cpu = this->cpu.lock())
 		{
@@ -270,7 +272,7 @@ void debugger_frame::UpdateUI()
 
 	if (!cpu)
 	{
-		if (m_last_pc != -1 || m_last_stat)
+		if (m_last_pc != umax || m_last_stat)
 		{
 			m_last_pc = -1;
 			m_last_stat = 0;
@@ -390,7 +392,7 @@ void debugger_frame::OnSelectUnit()
 void debugger_frame::DoUpdate()
 {
 	// Check if we need to disable a step over bp
-	if (m_last_step_over_breakpoint != -1 && GetPc() == m_last_step_over_breakpoint)
+	if (m_last_step_over_breakpoint != umax && GetPc() == m_last_step_over_breakpoint)
 	{
 		m_breakpoint_handler->RemoveBreakpoint(m_last_step_over_breakpoint);
 		m_last_step_over_breakpoint = -1;
@@ -587,7 +589,7 @@ void debugger_frame::DoStep(bool stepOver)
 
 				// Undefine previous step over breakpoint if it hasnt been already
 				// This can happen when the user steps over a branch that doesn't return to itself
-				if (m_last_step_over_breakpoint != -1)
+				if (m_last_step_over_breakpoint != umax)
 				{
 					m_breakpoint_handler->RemoveBreakpoint(next_instruction_pc);
 				}

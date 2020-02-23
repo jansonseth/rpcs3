@@ -1,7 +1,5 @@
 ﻿#include "headless_application.h"
 
-#include "Emu/System.h"
-
 #include "Emu/RSX/GSRender.h"
 
 #include <clocale>
@@ -44,7 +42,7 @@ void headless_application::InitializeCallbacks()
 			quit();
 		}
 	};
-	callbacks.call_after = [=](std::function<void()> func)
+	callbacks.call_after = [=, this](std::function<void()> func)
 	{
 		RequestCallAfter(std::move(func));
 	};
@@ -55,7 +53,7 @@ void headless_application::InitializeCallbacks()
 	callbacks.get_save_dialog                = []() -> std::unique_ptr<SaveDialogBase> { return std::unique_ptr<SaveDialogBase>(); };
 	callbacks.get_trophy_notification_dialog = []() -> std::unique_ptr<TrophyNotificationBase> { return std::unique_ptr<TrophyNotificationBase>(); };
 
-	callbacks.on_run    = []() {};
+	callbacks.on_run    = [](bool /*start_playtime*/) {};
 	callbacks.on_pause  = []() {};
 	callbacks.on_resume = []() {};
 	callbacks.on_stop   = []() {};

@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "overlays.h"
+#include "Emu/System.h"
+#include "Emu/system_config.h"
 
 namespace rsx
 {
@@ -174,7 +176,7 @@ namespace rsx
 				btn_cancel.translate(0, offset);
 			}
 
-			text_display.set_text(utf8_to_ascii8(text));
+			text_display.set_text(text);
 
 			u16 text_w, text_h;
 			text_display.measure_text(text_w, text_h);
@@ -212,7 +214,7 @@ namespace rsx
 				{
 					if (auto error = run_input_loop())
 					{
-						LOG_ERROR(RSX, "Dialog input loop exited with error code=%d", error);
+						rsx_log.error("Dialog input loop exited with error code=%d", error);
 						return error;
 					}
 				}
@@ -229,26 +231,34 @@ namespace rsx
 			}
 			else
 			{
-				thread_ctrl::spawn("dialog input thread", [&]
+				std::scoped_lock lock(m_threadpool_mutex);
+				if (!exit)
 				{
-					if (interactive)
+					m_workers.emplace_back([&]()
 					{
-						if (auto error = run_input_loop())
+						if (interactive)
 						{
-							LOG_ERROR(RSX, "Dialog input loop exited with error code=%d", error);
-						}
-					}
-					else
-					{
-						while (!exit)
-						{
-							refresh();
+							auto ref = g_fxo->get<display_manager>()->get(uid);
 
-							// Only update the screen at about 60fps since updating it everytime slows down the process
-							std::this_thread::sleep_for(16ms);
+							if (auto error = run_input_loop())
+							{
+								rsx_log.error("Dialog input loop exited with error code=%d", error);
+							}
+
+							verify(HERE), ref.get() == static_cast<overlay*>(this);
 						}
-					}
-				});
+						else
+						{
+							while (!exit)
+							{
+								refresh();
+
+								// Only update the screen at about 60fps since updating it everytime slows down the process
+								std::this_thread::sleep_for(16ms);
+							}
+						}
+					});
+				}
 			}
 
 			return CELL_OK;
@@ -287,7 +297,7 @@ namespace rsx
 			else
 				progress_2.inc(value);
 
-			if (index == taskbar_index || taskbar_index == -1)
+			if (index == static_cast<u32>(taskbar_index) || taskbar_index == -1)
 				Emu.GetCallbacks().handle_taskbar_progress(1, static_cast<s32>(value));
 
 			return CELL_OK;
@@ -318,7 +328,7 @@ namespace rsx
 			else
 				progress_2.set_limit(static_cast<f32>(limit));
 
-			if (index == taskbar_index)
+			if (index == static_cast<u32>(taskbar_index))
 			{
 				taskbar_limit = limit;
 				Emu.GetCallbacks().handle_taskbar_progress(2, taskbar_limit);
