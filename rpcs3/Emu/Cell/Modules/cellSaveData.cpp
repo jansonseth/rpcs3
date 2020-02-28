@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "Emu/VFS.h"
+#include "Emu/Cell/lv2/sys_fs.h"
 #include "Emu/Cell/lv2/sys_sync.h"
 #include "Emu/Cell/lv2/sys_process.h"
 #include "Emu/Cell/PPUModule.h"
@@ -250,19 +251,15 @@ static error_code select_and_delete(ppu_thread& ppu)
 }
 
 // Displays a CellSaveDataCBResult error message.
-static error_code display_callback_result_error_message(ppu_thread& ppu, vm::ptr<CellSaveDataCBResult> result, u32 errDialog)
+static error_code display_callback_result_error_message(ppu_thread& ppu, const CellSaveDataCBResult& result, u32 errDialog)
 {
-	// TODO: errDialog == CELL_SAVEDATA_ERRDIALOG_NOREPEAT
-	if (!result || errDialog != CELL_SAVEDATA_ERRDIALOG_ALWAYS)
-		return CELL_SAVEDATA_ERROR_CBRESULT;
-
 	std::string msg;
 	bool use_invalid_message = false;
 
-	switch (result->result)
+	switch (result.result)
 	{
 	case CELL_SAVEDATA_CBRESULT_ERR_NOSPACE:
-		msg = fmt::format("Error - Insufficient free space\n\nSpace needed: %d KB", result->errNeedSizeKB);
+		msg = fmt::format("Error - Insufficient free space\n\nSpace needed: %d KB", result.errNeedSizeKB);
 		break;
 	case CELL_SAVEDATA_CBRESULT_ERR_FAILURE:
 		msg = "Error - Failed to save or load";
@@ -274,18 +271,23 @@ static error_code display_callback_result_error_message(ppu_thread& ppu, vm::ptr
 		msg = "Error - Save data cannot be found";
 		break;
 	case CELL_SAVEDATA_CBRESULT_ERR_INVALID:
-		if (result->invalidMsg)
+		if (result.invalidMsg)
 			use_invalid_message = true;
 		break;
 	default:
-		return CELL_SAVEDATA_ERROR_CBRESULT;
+		// ****** sysutil savedata parameter error : 22 ******
+		return {CELL_SAVEDATA_ERROR_PARAM, "22"};
 	}
+
+	// TODO: errDialog == CELL_SAVEDATA_ERRDIALOG_NOREPEAT
+	if (errDialog != CELL_SAVEDATA_ERRDIALOG_ALWAYS)
+		return CELL_SAVEDATA_ERROR_CBRESULT;
 
 	// Yield before a blocking dialog is being spawned
 	lv2_obj::sleep(ppu);
 
 	// Get user confirmation by opening a blocking dialog (return value should be irrelevant here)
-	error_code res = open_msg_dialog(true, CELL_MSGDIALOG_TYPE_SE_TYPE_NORMAL | CELL_MSGDIALOG_TYPE_BUTTON_TYPE_OK, use_invalid_message ? result->invalidMsg : vm::make_str(msg));
+	error_code res = open_msg_dialog(true, CELL_MSGDIALOG_TYPE_SE_TYPE_NORMAL | CELL_MSGDIALOG_TYPE_BUTTON_TYPE_OK, use_invalid_message ? result.invalidMsg : vm::make_str(msg));
 
 	// Reschedule after a blocking dialog returns
 	if (ppu.check_state())
@@ -551,7 +553,7 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 
 	lv2_sleep(ppu, 500);
 
-	*g_savedata_context = {};
+	std::memset(g_savedata_context.get_ptr(), 0, g_savedata_context.size());
 
 	vm::ptr<CellSaveDataCBResult> result   = g_savedata_context.ptr(&savedata_context::result);
 	vm::ptr<CellSaveDataListGet>  listGet  = g_savedata_context.ptr(&savedata_context::listGet);
@@ -683,19 +685,19 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 			// List Callback
 			funcList(ppu, result, listGet, listSet);
 
-			if (result->result < 0)
+			if (const s32 res = result->result; res != CELL_SAVEDATA_CBRESULT_OK_NEXT)
 			{
 				cellSaveData.warning("savedata_op(): funcList returned result=%d.", result->result);
 
-				return display_callback_result_error_message(ppu, result, errDialog);
-			}
+				// if the callback has returned ok, lets return OK.
+				// typically used at game launch when no list is actually required.
+				// CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM is only valid for funcFile and funcDone
+				if (result->result == CELL_SAVEDATA_CBRESULT_OK_LAST || result->result == CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM)
+				{
+					return CELL_OK;
+				}
 
-			// if the callback has returned ok, lets return OK.
-			// typically used at game launch when no list is actually required.
-			// CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM is only valid for funcFile and funcDone
-			if (result->result == CELL_SAVEDATA_CBRESULT_OK_LAST || result->result == CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM)
-			{
-				return CELL_OK;
+				return display_callback_result_error_message(ppu, *result, errDialog);
 			}
 
 			// Clean save data list
@@ -894,16 +896,16 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 			{
 				delete_save();
 
-				if (result->result < 0)
+				if (const s32 res = result->result; res != CELL_SAVEDATA_CBRESULT_OK_NEXT)
 				{
-					cellSaveData.warning("savedata_op(): funcDone returned result=%d.", result->result);
+					cellSaveData.warning("savedata_op(): funcDone returned result=%d.", res);
 
-					return display_callback_result_error_message(ppu, result, errDialog);
-				}
+					if (res == CELL_SAVEDATA_CBRESULT_OK_LAST || res == CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM)
+					{
+						return CELL_OK;
+					}
 
-				if (result->result == CELL_SAVEDATA_CBRESULT_OK_LAST || result->result == CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM)
-				{
-					return CELL_OK;
+					return display_callback_result_error_message(ppu, *result, errDialog);
 				}
 
 				// CELL_SAVEDATA_CBRESULT_OK_NEXT expected
@@ -923,24 +925,17 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 			// Fixed Callback
 			funcFixed(ppu, result, listGet, fixedSet);
 
-			// check result for validity - CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM is not a valid result for funcFixed
-			if (result->result < CELL_SAVEDATA_CBRESULT_ERR_INVALID || result->result >= CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM)
+			if (const s32 res = result->result; res != CELL_SAVEDATA_CBRESULT_OK_NEXT)
 			{
-				cellSaveData.error("savedata_op(): funcFixed returned result=%d.", result->result);
-				return CELL_SAVEDATA_ERROR_PARAM;
-			}
+				cellSaveData.warning("savedata_op(): funcFixed returned result=%d.", res);
 
-			// skip all following steps if OK_LAST
-			if (result->result == CELL_SAVEDATA_CBRESULT_OK_LAST)
-			{
-				return CELL_OK;
-			}
+				// skip all following steps if OK_LAST (NOCONFIRM is not allowed)
+				if (res == CELL_SAVEDATA_CBRESULT_OK_LAST)
+				{
+					return CELL_OK;
+				}
 
-			if (result->result < 0)
-			{
-				cellSaveData.warning("savedata_op(): funcFixed returned result=%d.", result->result);
-
-				return display_callback_result_error_message(ppu, result, errDialog);
+				return display_callback_result_error_message(ppu, *result, errDialog);
 			}
 
 			if (!fixedSet->dirName)
@@ -1007,11 +1002,11 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 			{
 				delete_save();
 
-				if (result->result < 0)
+				if (const s32 res = result->result; res != CELL_SAVEDATA_CBRESULT_OK_NEXT)
 				{
-					cellSaveData.warning("savedata_op(): funcDone_ returned result=%d.", result->result);
+					cellSaveData.warning("savedata_op(): funcDone returned result=%d.", res);
 
-					return display_callback_result_error_message(ppu, result, errDialog);
+					return display_callback_result_error_message(ppu, *result, errDialog);
 				}
 
 				return CELL_OK;
@@ -1177,27 +1172,17 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 		// Stat Callback
 		funcStat(ppu, result, statGet, statSet);
 
-		if (result->result != CELL_SAVEDATA_CBRESULT_OK_NEXT)
+		if (const s32 res = result->result; res != CELL_SAVEDATA_CBRESULT_OK_NEXT)
 		{
-			cellSaveData.warning("savedata_op(): funcStat returned result=%d.", result->result);
+			cellSaveData.warning("savedata_op(): funcStat returned result=%d.", res);
 
-			// Skip and error
-			if (result->result >= CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM || result->result < CELL_SAVEDATA_CBRESULT_ERR_INVALID)
-			{
-				// ****** sysutil savedata parameter error : 22 ******
-				return {CELL_SAVEDATA_ERROR_PARAM, "22"};
-			}
-
-			if (result->result < CELL_SAVEDATA_CBRESULT_OK_NEXT)
-			{
-				return display_callback_result_error_message(ppu, result, errDialog);
-			}
-
-			// Skip and return without error
-			if (result->result == CELL_SAVEDATA_CBRESULT_OK_LAST)
+			// Skip and return without error on OK_LAST (NOCONFIRM is not allowed)
+			if (res == CELL_SAVEDATA_CBRESULT_OK_LAST)
 			{
 				return CELL_OK;
 			}
+
+			return display_callback_result_error_message(ppu, *result, errDialog);
 		}
 
 		if (statSet->setParam)
@@ -1303,10 +1288,8 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 		}
 	}
 
-
-
 	// Create save directory if necessary
-	if (psf.size() && save_entry.isNew && !fs::create_dir(dir_path))
+	if (!psf.empty() && save_entry.isNew && !fs::create_dir(dir_path) && fs::g_tls_error != fs::error::exist)
 	{
 		cellSaveData.warning("savedata_op(): failed to create %s (%s)", dir_path, fs::g_tls_error);
 		return CELL_SAVEDATA_ERROR_ACCESS_ERROR;
@@ -1329,23 +1312,34 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 	}
 
 	fileGet->excSize = 0;
-	memset(fileGet->reserved, 0, sizeof(fileGet->reserved));
 
 	error_code savedata_result = CELL_OK;
 
 	while (funcFile)
 	{
+		std::memset(fileSet.get_ptr(), 0, fileSet.size());
+		std::memset(fileGet->reserved, 0, sizeof(fileGet->reserved));
+
 		funcFile(ppu, result, fileGet, fileSet);
 
-		if (result->result < 0)
+		if (const s32 res = result->result; res != CELL_SAVEDATA_CBRESULT_OK_NEXT)
 		{
-			savedata_result = {CELL_SAVEDATA_ERROR_CBRESULT, +result->result};
-			break;
-		}
+			if (res == CELL_SAVEDATA_CBRESULT_OK_LAST || res == CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM)
+			{
+				// TODO: display user prompt
+				break;
+			}
 
-		if (result->result == CELL_SAVEDATA_CBRESULT_OK_LAST || result->result == CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM)
-		{
-			// TODO: display user prompt
+			cellSaveData.warning("savedata_op(): funcFile returned result=%d.", res);
+
+			if (res < CELL_SAVEDATA_CBRESULT_ERR_INVALID || res > CELL_SAVEDATA_CBRESULT_OK_LAST_NOCONFIRM)
+			{
+				// ****** sysutil savedata parameter error : 22 ******
+				savedata_result = {CELL_SAVEDATA_ERROR_PARAM, "22"};
+				break;
+			}
+
+			savedata_result = {CELL_SAVEDATA_ERROR_CBRESULT, res};
 			break;
 		}
 
@@ -1460,7 +1454,7 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 
 			// Read from memory file to vm
 			const u64 sr = file.seek(fileSet->fileOffset);
-			const u64 rr = file.read(fileSet->fileBuf.get_ptr(), access_size);
+			const u64 rr = lv2_file::op_read(file, fileSet->fileBuf, access_size);
 			fileGet->excSize = ::narrow<u32>(rr);
 			break;
 		}
@@ -1476,7 +1470,7 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 
 			// Write to memory file and truncate
 			const u64 sr = file.seek(fileSet->fileOffset);
-			const u64 wr = file.write(fileSet->fileBuf.get_ptr(), access_size);
+			const u64 wr = lv2_file::op_write(file, fileSet->fileBuf, access_size);
 			file.trunc(sr + wr);
 			fileGet->excSize = ::narrow<u32>(wr);
 			all_times.erase(file_path);
@@ -1508,7 +1502,7 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 
 			// Write to memory file normally
 			const u64 sr = file.seek(fileSet->fileOffset);
-			const u64 wr = file.write(fileSet->fileBuf.get_ptr(), access_size);
+			const u64 wr = lv2_file::op_write(file, fileSet->fileBuf, access_size);
 			fileGet->excSize = ::narrow<u32>(wr);
 			all_times.erase(file_path);
 			add_to_blist(file_path);
@@ -1591,7 +1585,7 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 
 	if (savedata_result + 0u == CELL_SAVEDATA_ERROR_CBRESULT)
 	{
-		return display_callback_result_error_message(ppu, result, errDialog);
+		return display_callback_result_error_message(ppu, *result, errDialog);
 	}
 
 	return savedata_result;

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "update_manager.h"
+#include "progress_dialog.h"
 #include "rpcs3_version.h"
 #include "Utilities/StrUtil.h"
 #include "Crypto/sha256.h"
@@ -26,7 +27,7 @@
 #include <sys/stat.h>
 #endif
 
-LOG_CHANNEL(update_log);
+LOG_CHANNEL(update_log, "UPDATER");
 
 update_manager::update_manager()
 {
@@ -216,7 +217,7 @@ bool update_manager::handle_json(const QByteArray& data, bool automatic)
 		auto time_from_str = [](const std::string& str, const std::string& format, tm* tm) -> bool
 		{
 			std::istringstream input(str);
-			input.imbue(std::locale(setlocale(LC_ALL, nullptr)));
+			input.imbue(std::locale(setlocale(LC_ALL, "C")));
 			input >> std::get_time(tm, format.c_str());
 			if (input.fail())
 				return false;

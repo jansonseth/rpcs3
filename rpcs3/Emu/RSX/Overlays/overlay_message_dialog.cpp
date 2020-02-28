@@ -1,7 +1,8 @@
 ﻿#include "stdafx.h"
-#include "overlays.h"
+#include "overlay_message_dialog.h"
 #include "Emu/System.h"
 #include "Emu/system_config.h"
+#include "Emu/Cell/ErrorCodes.h"
 
 namespace rsx
 {
@@ -75,6 +76,11 @@ namespace rsx
 
 		compiled_resource message_dialog::get_compiled()
 		{
+			if (!visible)
+			{
+				return {};
+			}
+
 			compiled_resource result;
 
 			if (background_image && background_image->data)
@@ -158,6 +164,8 @@ namespace rsx
 
 		error_code message_dialog::show(bool is_blocking, const std::string& text, const MsgDialogType& type, std::function<void(s32 status)> on_close)
 		{
+			visible = false;
+
 			num_progress_bars = type.progress_bar_count;
 			if (num_progress_bars)
 			{
@@ -207,6 +215,7 @@ namespace rsx
 			}
 
 			this->on_close = std::move(on_close);
+			visible = true;
 
 			if (is_blocking)
 			{
@@ -231,11 +240,12 @@ namespace rsx
 			}
 			else
 			{
-				std::scoped_lock lock(m_threadpool_mutex);
 				if (!exit)
 				{
-					m_workers.emplace_back([&]()
+					g_fxo->init<named_thread>("MsgDialog Thread", [&, tbit = alloc_thread_bit()]()
 					{
+						g_thread_bit = tbit;
+
 						if (interactive)
 						{
 							auto ref = g_fxo->get<display_manager>()->get(uid);
@@ -244,19 +254,26 @@ namespace rsx
 							{
 								rsx_log.error("Dialog input loop exited with error code=%d", error);
 							}
-
-							verify(HERE), ref.get() == static_cast<overlay*>(this);
 						}
 						else
 						{
-							while (!exit)
+							while (!exit && thread_ctrl::state() == thread_state::created)
 							{
 								refresh();
 
 								// Only update the screen at about 60fps since updating it everytime slows down the process
 								std::this_thread::sleep_for(16ms);
+
+								if (!g_fxo->get<display_manager>())
+								{
+									rsx_log.fatal("display_manager was improperly destroyed");
+									break;
+								}
 							}
 						}
+
+						thread_bits &= ~tbit;
+						thread_bits.notify_all();
 					});
 				}
 			}

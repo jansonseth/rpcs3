@@ -30,6 +30,7 @@ target_sources(rpcs3_emu PRIVATE
 	../util/atomic.cpp
 	../util/atomic2.cpp
 	../util/shared_cptr.cpp
+	../util/fixed_typemap.cpp
 	../../Utilities/bin_patch.cpp
 	../../Utilities/cond.cpp
 	../../Utilities/Config.cpp
@@ -341,8 +342,9 @@ target_link_libraries(rpcs3_emu
 
 # Io
 target_sources(rpcs3_emu PRIVATE
-	Io/pad_config.cpp
 	Io/KeyboardHandler.cpp
+	Io/pad_config.cpp
+	Io/pad_config_types.cpp
 	Io/PadHandler.cpp
 	Io/usb_device.cpp
 	Io/Skylander.cpp
@@ -384,6 +386,7 @@ target_sources(rpcs3_emu PRIVATE
 	RSX/Overlays/overlay_perf_metrics.cpp
 	RSX/Overlays/overlay_progress_bar.cpp
 	RSX/Overlays/overlay_save_dialog.cpp
+	RSX/Overlays/overlay_utils.cpp
 	RSX/Overlays/overlays.cpp
 	RSX/Overlays/overlay_shader_compile_notification.cpp
 	RSX/Overlays/overlay_trophy_notification.cpp

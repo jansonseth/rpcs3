@@ -2,7 +2,9 @@
 #include "Emu/Cell/PPUModule.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/lv2/sys_sync.h"
-#include "Emu/RSX/Overlays/overlays.h"
+#include "Emu/RSX/Overlays/overlay_message_dialog.h"
+
+#include "Input/pad_thread.h"
 
 #include "cellSysutil.h"
 #include "cellMsgDialog.h"

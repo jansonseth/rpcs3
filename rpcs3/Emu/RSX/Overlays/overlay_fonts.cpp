@@ -6,7 +6,7 @@ namespace rsx
 {
 	namespace overlays
 	{
-		void codepage::initialize_glyphs(u16 codepage_id, f32 font_size, const std::vector<u8>& ttf_data)
+		void codepage::initialize_glyphs(char32_t codepage_id, f32 font_size, const std::vector<u8>& ttf_data)
 		{
 			glyph_base = (codepage_id * 256);
 			glyph_data.resize(bitmap_width * bitmap_height);
@@ -31,7 +31,7 @@ namespace rsx
 			stbtt_PackEnd(&context);
 		}
 
-		stbtt_aligned_quad codepage::get_char(wchar_t c, f32& x_advance, f32& y_advance)
+		stbtt_aligned_quad codepage::get_char(char32_t c, f32& x_advance, f32& y_advance)
 		{
 			stbtt_aligned_quad quad;
 			stbtt_GetPackedQuad(pack_info.data(), bitmap_width, bitmap_height, (c - glyph_base), &x_advance, &y_advance, &quad, false);
@@ -51,7 +51,7 @@ namespace rsx
 			initialized = true;
 		}
 
-		language_class font::classify(u16 codepage_id)
+		language_class font::classify(char32_t codepage_id)
 		{
 			switch (codepage_id)
 			{
@@ -93,7 +93,7 @@ namespace rsx
 			result.font_names.push_back(font_name);
 
 #ifdef _WIN32
-			result.lookup_font_dirs.push_back("C:/Windows/Fonts/");
+			result.lookup_font_dirs.emplace_back("C:/Windows/Fonts/");
 #else
 			char* home = getenv("HOME");
 			if (home == nullptr)
@@ -113,13 +113,13 @@ namespace rsx
 			{
 			case language_class::default_:
 			{
-				result.font_names.push_back("Arial.ttf");
+				result.font_names.emplace_back("Arial.ttf");
 #ifndef _WIN32
 				result.font_names.emplace_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); //	ubuntu
 				result.font_names.emplace_back("/usr/share/fonts/TTF/DejaVuSans.ttf");             //	arch
 #endif
 				// Attempt to load a font from dev_flash as a last resort
-				result.font_names.push_back("SCE-PS3-VR-R-LATIN.TTF");
+				result.font_names.emplace_back("SCE-PS3-VR-R-LATIN.TTF");
 				break;
 			}
 			case language_class::cjk_base:
@@ -128,10 +128,10 @@ namespace rsx
 				result.font_names.clear();
 
 				// Attempt to load a font from dev_flash before any other source
-				result.font_names.push_back("SCE-PS3-SR-R-JPN.TTF");
+				result.font_names.emplace_back("SCE-PS3-SR-R-JPN.TTF");
 
 				// Known system font as last fallback
-				result.font_names.push_back("Yu Gothic.ttf");
+				result.font_names.emplace_back("Yu Gothic.ttf");
 				break;
 			}
 			case language_class::hangul:
@@ -140,10 +140,10 @@ namespace rsx
 				result.font_names.clear();
 
 				// Attempt to load a font from dev_flash before any other source
-				result.font_names.push_back("SCE-PS3-YG-R-KOR.TTF");
+				result.font_names.emplace_back("SCE-PS3-YG-R-KOR.TTF");
 
 				// Known system font as last fallback
-				result.font_names.push_back("Malgun Gothic.ttf");
+				result.font_names.emplace_back("Malgun Gothic.ttf");
 				break;
 			}
 			}
@@ -151,7 +151,7 @@ namespace rsx
 			return result;
 		}
 
-		codepage* font::initialize_codepage(u16 codepage_id)
+		codepage* font::initialize_codepage(char32_t codepage_id)
 		{
 			// Init glyph
 			const auto class_ = classify(codepage_id);
@@ -172,7 +172,7 @@ namespace rsx
 					break;
 				}
 
-				std::string extension = "";
+				std::string extension;
 				if (const auto extension_start = font_file.find_last_of('.');
 					extension_start != std::string::npos)
 				{
@@ -210,7 +210,7 @@ namespace rsx
 			}
 			else
 			{
-				rsx_log.error("Failed to initialize font '%s.ttf' on codepage %d", font_name, codepage_id);
+				rsx_log.error("Failed to initialize font '%s.ttf' on codepage %d", font_name, static_cast<u32>(codepage_id));
 				return nullptr;
 			}
 
@@ -232,7 +232,7 @@ namespace rsx
 			return ret;
 		}
 
-		stbtt_aligned_quad font::get_char(wchar_t c, f32& x_advance, f32& y_advance)
+		stbtt_aligned_quad font::get_char(char32_t c, f32& x_advance, f32& y_advance)
 		{
 			if (!initialized)
 				return {};
@@ -265,7 +265,7 @@ namespace rsx
 			}
 		}
 
-		void font::render_text_ex(std::vector<vertex>& result, f32& x_advance, f32& y_advance, const wchar_t* text, u32 char_limit, u16 max_width, bool wrap)
+		void font::render_text_ex(std::vector<vertex>& result, f32& x_advance, f32& y_advance, const char32_t* text, u32 char_limit, u16 max_width, bool wrap)
 		{
 			x_advance = 0.f;
 			y_advance = 0.f;
@@ -401,7 +401,7 @@ namespace rsx
 			}
 		}
 
-		std::vector<vertex> font::render_text(const wchar_t* text, u16 max_width, bool wrap)
+		std::vector<vertex> font::render_text(const char32_t* text, u16 max_width, bool wrap)
 		{
 			std::vector<vertex> result;
 			f32 unused_x, unused_y;
@@ -410,7 +410,7 @@ namespace rsx
 			return result;
 		}
 
-		std::pair<f32, f32> font::get_char_offset(const wchar_t* text, u16 max_length, u16 max_width, bool wrap)
+		std::pair<f32, f32> font::get_char_offset(const char32_t* text, u16 max_length, u16 max_width, bool wrap)
 		{
 			std::vector<vertex> unused;
 			f32 loc_x, loc_y;
