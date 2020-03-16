@@ -3,6 +3,7 @@
 #include <deque>
 #include <variant>
 #include <stack>
+#include <atomic>
 
 #include "GCM.h"
 #include "rsx_cache.h"
@@ -26,8 +27,7 @@
 extern u64 get_guest_system_time();
 extern u64 get_system_time();
 
-extern bool user_asked_for_frame_capture;
-extern bool capture_current_frame;
+extern std::atomic<bool> user_asked_for_frame_capture;
 extern rsx::frame_trace_data frame_debug;
 extern rsx::frame_capture_data frame_capture;
 
@@ -434,7 +434,7 @@ namespace rsx
 			void read_report(class ::rsx::thread* ptimer, vm::addr_t sink, u32 type);
 
 			// Clears current stat block and increments stat_tag_id
-			void clear(class ::rsx::thread* ptimer);
+			void clear(class ::rsx::thread* ptimer, u32 type);
 
 			// Forcefully flushes all
 			void sync(class ::rsx::thread* ptimer);
@@ -674,8 +674,8 @@ namespace rsx
 		u32 local_mem_size{0};
 
 		bool m_rtts_dirty;
-		bool m_textures_dirty[16];
-		bool m_vertex_textures_dirty[4];
+		std::array<bool, 16> m_textures_dirty;
+		std::array<bool, 4> m_vertex_textures_dirty;
 		bool m_framebuffer_state_contested = false;
 		rsx::framebuffer_creation_context m_current_framebuffer_context = rsx::framebuffer_creation_context::context_draw;
 
@@ -710,16 +710,14 @@ namespace rsx
 		void get_current_fragment_program(const std::array<std::unique_ptr<rsx::sampled_image_descriptor_base>, rsx::limits::fragment_textures_count>& sampler_descriptors);
 
 	public:
-		double fps_limit = 59.94;
-
-	public:
-		u64 start_rsx_time = 0;
+		u64 target_rsx_flip_time = 0;
 		u64 int_flip_index = 0;
 		u64 last_flip_time = 0;
 		vm::ptr<void(u32)> flip_handler = vm::null;
 		vm::ptr<void(u32)> user_handler = vm::null;
 		vm::ptr<void(u32)> vblank_handler = vm::null;
 		atomic_t<u64> vblank_count{0};
+		bool capture_current_frame = false;
 
 	public:
 		bool invalid_command_interrupt_raised = false;

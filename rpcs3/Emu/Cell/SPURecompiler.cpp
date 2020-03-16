@@ -394,11 +394,6 @@ void spu_cache::initialize()
 	atomic_t<std::size_t> fnext{};
 	atomic_t<u8> fail_flag{0};
 
-	// Initialize compiler instances for parallel compilation
-	u32 max_threads = static_cast<u32>(g_cfg.core.llvm_threads);
-	u32 thread_count = max_threads > 0 ? std::min(max_threads, std::thread::hardware_concurrency()) : std::thread::hardware_concurrency();
-	std::vector<std::unique_ptr<spu_recompiler_base>> compilers{thread_count};
-
 	if (g_cfg.core.spu_decoder == spu_decoder_type::fast || g_cfg.core.spu_decoder == spu_decoder_type::llvm)
 	{
 		if (auto compiler = spu_recompiler_base::make_llvm_recompiler(11))
@@ -421,26 +416,7 @@ void spu_cache::initialize()
 		}
 	}
 
-	for (auto& compiler : compilers)
-	{
-		if (g_cfg.core.spu_decoder == spu_decoder_type::asmjit)
-		{
-			compiler = spu_recompiler_base::make_asmjit_recompiler();
-		}
-		else if (g_cfg.core.spu_decoder == spu_decoder_type::llvm)
-		{
-			compiler = spu_recompiler_base::make_llvm_recompiler();
-		}
-		else
-		{
-			compilers.clear();
-			break;
-		}
-
-		compiler->init();
-	}
-
-	if (!compilers.empty() && !func_list.empty())
+	if (g_cfg.core.spu_decoder == spu_decoder_type::asmjit || g_cfg.core.spu_decoder == spu_decoder_type::llvm)
 	{
 		// Initialize progress dialog (wait for previous progress done)
 		while (g_progr_ptotal)
@@ -449,13 +425,28 @@ void spu_cache::initialize()
 		}
 
 		g_progr = "Building SPU cache...";
-		g_progr_ptotal += func_list.size();
+		g_progr_ptotal += ::size32(func_list);
 	}
 
-	std::deque<named_thread<std::function<void()>>> thread_queue;
-
-	for (std::size_t i = 0; i < compilers.size(); i++) thread_queue.emplace_back("Worker " + std::to_string(i), [&, compiler = compilers[i].get()]()
+	named_thread_group workers("SPU Worker ", Emu.GetMaxThreads(), [&]() -> uint
 	{
+		// Initialize compiler instances for parallel compilation
+		std::unique_ptr<spu_recompiler_base> compiler;
+
+		if (g_cfg.core.spu_decoder == spu_decoder_type::asmjit)
+		{
+			compiler = spu_recompiler_base::make_asmjit_recompiler();
+		}
+		else if (g_cfg.core.spu_decoder == spu_decoder_type::llvm)
+		{
+			compiler = spu_recompiler_base::make_llvm_recompiler();
+		}
+
+		compiler->init();
+
+		// How much every thread compiled
+		uint result = 0;
+
 		// Fake LS
 		std::vector<be_t<u32>> ls(0x10000);
 
@@ -497,13 +488,17 @@ void spu_cache::initialize()
 			std::memset(ls.data() + start / 4, 0, 4 * (size0 - 1));
 
 			g_progr_pdone++;
+
+			result++;
 		}
+
+		return result;
 	});
 
-	// Join all threads
-	while (!thread_queue.empty())
+	// Join (implicitly) and print individual results
+	for (u32 i = 0; i < workers.size(); i++)
 	{
-		thread_queue.pop_front();
+		spu_log.notice("SPU Runtime: Worker %u built %u programs.", i + 1, workers[i]);
 	}
 
 	if (Emu.IsStopped())
@@ -518,7 +513,7 @@ void spu_cache::initialize()
 		return;
 	}
 
-	if (!compilers.empty() && !func_list.empty())
+	if ((g_cfg.core.spu_decoder == spu_decoder_type::asmjit || g_cfg.core.spu_decoder == spu_decoder_type::llvm) && !func_list.empty())
 	{
 		spu_log.success("SPU Runtime: Built %u functions.", func_list.size());
 	}
@@ -1088,7 +1083,6 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 	if (!func)
 	{
 		spu_log.fatal("[0x%05x] Compilation failed.", spu.pc);
-		Emu.Pause();
 		return;
 	}
 
@@ -1160,7 +1154,7 @@ void spu_recompiler_base::branch(spu_thread& spu, void*, u8* rip)
 	spu_runtime::g_tail_escape(&spu, func, rip);
 }
 
-void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* rip) try
+void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* rip)
 {
 	// Select opcode table
 	const auto& table = *(
@@ -1183,12 +1177,6 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* rip) tr
 		if (table[spu_decode(op)](spu, {op}))
 			spu.pc += 4;
 	}
-}
-catch (const std::exception& e)
-{
-	Emu.Pause();
-	spu_log.fatal("%s thrown: %s", typeid(e).name(), e.what());
-	spu_log.notice("\n%s", spu.dump());
 }
 
 spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point)
@@ -1503,7 +1491,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point)
 
 					if (jt_abs.size() >= jt_rel.size())
 					{
-						const u32 new_size = (start - lsa) / 4 + jt_abs.size();
+						const u32 new_size = (start - lsa) / 4 + ::size32(jt_abs);
 
 						if (result.data.size() < new_size)
 						{
@@ -1522,7 +1510,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point)
 
 					if (jt_rel.size() >= jt_abs.size())
 					{
-						const u32 new_size = (start - lsa) / 4 + jt_rel.size();
+						const u32 new_size = (start - lsa) / 4 + ::size32(jt_rel);
 
 						if (result.data.size() < new_size)
 						{
@@ -1874,7 +1862,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point)
 		{
 			m_regmod[pos / 4] = op.rt;
 
-			if (-op.i7 & 0x20)
+			if ((0 - op.i7) & 0x20)
 			{
 				vflags[op.rt] = +vf::is_const;
 				values[op.rt] = 0;
@@ -1882,7 +1870,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point)
 			}
 
 			vflags[op.rt] = vflags[op.ra] & vf::is_const;
-			values[op.rt] = values[op.ra] >> (-op.i7 & 0x1f);
+			values[op.rt] = values[op.ra] >> ((0 - op.i7) & 0x1f);
 			break;
 		}
 		case spu_itype::SHLI:
@@ -1935,7 +1923,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point)
 
 	while (lsa > 0 || limit < 0x40000)
 	{
-		const u32 initial_size = result.data.size();
+		const u32 initial_size = ::size32(result.data);
 
 		// Check unreachable blocks
 		limit = std::min<u32>(limit, lsa + initial_size * 4);
@@ -4351,7 +4339,7 @@ public:
 				}
 
 				// Load unaligned code block from LS
-				llvm::Value* vls = m_ir->CreateAlignedLoad(_ptr<u32[8]>(data_addr, j - starta), 4);
+				llvm::Value* vls = m_ir->CreateAlignedLoad(_ptr<u32[8]>(data_addr, j - starta), llvm::MaybeAlign{4});
 
 				// Mask if necessary
 				if (holes)
@@ -4615,19 +4603,7 @@ public:
 					}
 
 					// Execute recompiler function (TODO)
-					try
-					{
-						(this->*g_decoder.decode(op))({op});
-					}
-					catch (const std::exception&)
-					{
-						std::string dump;
-						raw_string_ostream out(dump);
-						out << *module; // print IR
-						out.flush();
-						spu_log.error("[0x%x] LLVM dump:\n%s", m_pos, dump);
-						throw;
-					}
+					(this->*g_decoder.decode(op))({op});
 				}
 
 				// Finalize block with fallthrough if necessary
@@ -5001,7 +4977,6 @@ public:
 				}
 				}
 
-				try
 				{
 					m_interp_bblock = nullptr;
 
@@ -5148,15 +5123,6 @@ public:
 							m_ir->CreateRetVoid();
 						}
 					}
-				}
-				catch (const std::exception&)
-				{
-					std::string dump;
-					raw_string_ostream out(dump);
-					out << *module; // print IR
-					out.flush();
-					spu_log.error("[0x%x] LLVM dump:\n%s", m_pos, dump);
-					throw;
 				}
 			}
 
@@ -7386,27 +7352,25 @@ public:
 
 	value_t<f32[4]> fma32x4(value_t<f32[4]> a, value_t<f32[4]> b, value_t<f32[4]> c)
 	{
-		// Compare absolute values with max positive float in normal range.
-		const auto aa = bitcast<s32[4]>(fabs(a));
-		const auto ab = bitcast<s32[4]>(fabs(b));
-		const auto sc = eval(max(aa, ab) > 0x7f7fffff);
+		const auto ma = eval(sext<s32[4]>(fcmp_uno(a != fsplat<f32[4]>(0.))));
+		const auto mb = eval(sext<s32[4]>(fcmp_uno(b != fsplat<f32[4]>(0.))));
+		const auto ca = eval(bitcast<f32[4]>(bitcast<s32[4]>(a) & mb));
+		const auto cb = eval(bitcast<f32[4]>(bitcast<s32[4]>(b) & ma));
 
 		if (m_use_fma)
 		{
 			value_t<f32[4]> r;
-			r.value = m_ir->CreateCall(get_intrinsic<f32[4]>(llvm::Intrinsic::fma), {a.value, b.value, c.value});
-			r.value = m_ir->CreateSelect(sc.value, c.value, r.value);
+			r.value = m_ir->CreateCall(get_intrinsic<f32[4]>(llvm::Intrinsic::fma), {ca.value, cb.value, c.value});
 			return r;
 		}
 
 		// Convert to doubles
-		const auto xa = m_ir->CreateFPExt(a.value, get_type<f64[4]>());
-		const auto xb = m_ir->CreateFPExt(b.value, get_type<f64[4]>());
+		const auto xa = m_ir->CreateFPExt(ca.value, get_type<f64[4]>());
+		const auto xb = m_ir->CreateFPExt(cb.value, get_type<f64[4]>());
 		const auto xc = m_ir->CreateFPExt(c.value, get_type<f64[4]>());
 		const auto xr = m_ir->CreateCall(get_intrinsic<f64[4]>(llvm::Intrinsic::fmuladd), {xa, xb, xc});
 		value_t<f32[4]> r;
 		r.value = m_ir->CreateFPTrunc(xr, get_type<f32[4]>());
-		r.value = m_ir->CreateSelect(sc.value, c.value, r.value);
 		return r;
 	}
 

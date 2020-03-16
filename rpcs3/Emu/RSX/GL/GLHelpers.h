@@ -14,7 +14,7 @@
 
 #include "Emu/system_config.h"
 #include "Utilities/geometry.h"
-#include "Utilities/Log.h"
+#include "util/logs.hpp"
 
 #define GL_FRAGMENT_TEXTURES_START 0
 #define GL_VERTEX_TEXTURES_START   (GL_FRAGMENT_TEXTURES_START + 16)
@@ -234,7 +234,7 @@ namespace gl
 				vendor_string = "intel"; //lowest acceptable value
 			}
 
-			if (vendor_string.find("intel") != std::string::npos)
+			if (vendor_string.find("intel") != umax)
 			{
 				int version_major = 0;
 				int version_minor = 0;
@@ -258,16 +258,16 @@ namespace gl
 				if (!EXT_dsa_supported && glGetTextureImageEXT && glTextureBufferRangeEXT)
 					EXT_dsa_supported = true;
 			}
-			else if (vendor_string.find("nvidia") != std::string::npos)
+			else if (vendor_string.find("nvidia") != umax)
 			{
 				vendor_NVIDIA = true;
 			}
-			else if (vendor_string.find("x.org") != std::string::npos)
+			else if (vendor_string.find("x.org") != umax)
 			{
 				vendor_MESA = true;
 			}
 #ifdef _WIN32
-			else if (vendor_string.find("amd") != std::string::npos || vendor_string.find("ati") != std::string::npos)
+			else if (vendor_string.find("amd") != umax || vendor_string.find("ati") != umax)
 			{
 				vendor_AMD = true;
 			}
@@ -2396,42 +2396,6 @@ public:
 
 	namespace glsl
 	{
-		class compilation_exception : public exception
-		{
-		public:
-			explicit compilation_exception(const std::string& what_arg)
-			{
-				m_what = "compilation failed: '" + what_arg + "'";
-			}
-		};
-
-		class link_exception : public exception
-		{
-		public:
-			explicit link_exception(const std::string& what_arg)
-			{
-				m_what = "linkage failed: '" + what_arg + "'";
-			}
-		};
-
-		class validation_exception : public exception
-		{
-		public:
-			explicit validation_exception(const std::string& what_arg)
-			{
-				m_what = "compilation failed: '" + what_arg + "'";
-			}
-		};
-
-		class not_found_exception : public exception
-		{
-		public:
-			explicit not_found_exception(const std::string& what_arg)
-			{
-				m_what = what_arg + " not found.";
-			}
-		};
-
 		class shader
 		{
 		public:
@@ -2533,7 +2497,7 @@ public:
 						error_msg = buf.get();
 					}
 
-					throw compilation_exception(error_msg);
+					rsx_log.fatal("Compilation failed: %s", error_msg);
 				}
 
 				return *this;
@@ -2655,7 +2619,8 @@ public:
 						}
 						else
 						{
-							throw not_found_exception(name);
+							rsx_log.fatal("%s not found.", name);
+							return -1;
 						}
 					}
 
@@ -2663,7 +2628,8 @@ public:
 
 					if (result < 0)
 					{
-						throw not_found_exception(name);
+						rsx_log.fatal("%s not found.", name);
+						return result;
 					}
 
 					locations[name] = result;
@@ -2749,7 +2715,7 @@ public:
 						error_msg = buf.get();
 					}
 
-					throw link_exception(error_msg);
+					rsx_log.fatal("Linkage failed: %s", error_msg);
 				}
 			}
 

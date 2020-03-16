@@ -115,6 +115,7 @@ namespace vk
 	struct gpu_formats_support;
 	struct fence;
 	struct pipeline_binding_table;
+	class event;
 
 	const vk::context *get_current_thread_ctx();
 	void set_current_thread_ctx(const vk::context &ctx);
@@ -208,6 +209,10 @@ namespace vk
 		VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage, VkAccessFlags src_mask, VkAccessFlags dst_mask,
 		const VkImageSubresourceRange& range);
 
+	void insert_execution_barrier(VkCommandBuffer cmd,
+		VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+		VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
 	void raise_status_interrupt(runtime_state status);
 	void clear_status_interrupt(runtime_state status);
 	bool test_status_interrupt(runtime_state status);
@@ -223,7 +228,7 @@ namespace vk
 	// Fence reset with driver workarounds in place
 	void reset_fence(fence* pFence);
 	VkResult wait_for_fence(fence* pFence, u64 timeout = 0ull);
-	VkResult wait_for_event(VkEvent pEvent, u64 timeout = 0ull);
+	VkResult wait_for_event(event* pEvent, u64 timeout = 0ull);
 
 	// Handle unexpected submit with dangling occlusion query
 	// TODO: Move queries out of the renderer!
@@ -622,7 +627,7 @@ private:
 			rsx_log.notice("Found vulkan-compatible GPU: '%s' running on driver %s", get_name(), get_driver_version());
 
 			if (get_driver_vendor() == driver_vendor::RADV &&
-				get_name().find("LLVM 8.0.0") != std::string::npos)
+				get_name().find("LLVM 8.0.0") != umax)
 			{
 				// Serious driver bug causing black screens
 				// See https://bugs.freedesktop.org/show_bug.cgi?id=110970
@@ -646,22 +651,22 @@ private:
 			if (!driver_properties.driverID)
 			{
 				const auto gpu_name = get_name();
-				if (gpu_name.find("Radeon") != std::string::npos)
+				if (gpu_name.find("Radeon") != umax)
 				{
 					return driver_vendor::AMD;
 				}
 
-				if (gpu_name.find("NVIDIA") != std::string::npos || gpu_name.find("GeForce") != std::string::npos)
+				if (gpu_name.find("NVIDIA") != umax || gpu_name.find("GeForce") != umax)
 				{
 					return driver_vendor::NVIDIA;
 				}
 
-				if (gpu_name.find("RADV") != std::string::npos)
+				if (gpu_name.find("RADV") != umax)
 				{
 					return driver_vendor::RADV;
 				}
 
-				if (gpu_name.find("Intel") != std::string::npos)
+				if (gpu_name.find("Intel") != umax)
 				{
 					return driver_vendor::INTEL;
 				}
@@ -1730,6 +1735,86 @@ private:
 
 	private:
 		VkDevice m_device;
+	};
+
+	class event
+	{
+		VkDevice m_device = VK_NULL_HANDLE;
+		VkEvent m_vk_event = VK_NULL_HANDLE;
+
+		std::unique_ptr<buffer> m_buffer;
+		volatile uint32_t* m_value = nullptr;
+
+	public:
+		event(const render_device& dev)
+		{
+			m_device = dev;
+			if (dev.gpu().get_driver_vendor() != driver_vendor::AMD)
+			{
+				VkEventCreateInfo info
+				{
+					.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0
+				};
+				vkCreateEvent(dev, &info, nullptr, &m_vk_event);
+			}
+			else
+			{
+				// Work around AMD's broken event signals
+				m_buffer = std::make_unique<buffer>
+				(
+					dev,
+					4,
+					dev.get_memory_mapping().host_visible_coherent,
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+					VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+					0
+				);
+
+				m_value = reinterpret_cast<uint32_t*>(m_buffer->map(0, 4));
+				*m_value = 0xCAFEBABE;
+			}
+		}
+
+		~event()
+		{
+			if (m_vk_event) [[likely]]
+			{
+				vkDestroyEvent(m_device, m_vk_event, nullptr);
+			}
+			else
+			{
+				m_buffer->unmap();
+				m_buffer.reset();
+				m_value = nullptr;
+			}
+		}
+
+		void signal(const command_buffer& cmd, VkPipelineStageFlags stages)
+		{
+			if (m_vk_event) [[likely]]
+			{
+				vkCmdSetEvent(cmd, m_vk_event, stages);
+			}
+			else
+			{
+				insert_execution_barrier(cmd, stages, VK_PIPELINE_STAGE_TRANSFER_BIT);
+				vkCmdFillBuffer(cmd, m_buffer->value, 0, 4, 0xDEADBEEF);
+			}
+		}
+
+		VkResult status() const
+		{
+			if (m_vk_event) [[likely]]
+			{
+				return vkGetEventStatus(m_device, m_vk_event);
+			}
+			else
+			{
+				return (*m_value == 0xDEADBEEF)? VK_EVENT_SET : VK_EVENT_RESET;
+			}
+		}
 	};
 
 	struct sampler

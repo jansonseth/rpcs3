@@ -67,25 +67,18 @@ extern atomic_t<const char*> g_progr;
 extern atomic_t<u32> g_progr_ptotal;
 extern atomic_t<u32> g_progr_pdone;
 
-enum class join_status : u32
-{
-	joinable = 0,
-	detached = 0u-1,
-	exited = 0u-2,
-	zombie = 0u-3,
-};
-
 template <>
-void fmt_class_string<join_status>::format(std::string& out, u64 arg)
+void fmt_class_string<ppu_join_status>::format(std::string& out, u64 arg)
 {
-	format_enum(out, arg, [](join_status js)
+	format_enum(out, arg, [](ppu_join_status js)
 	{
 		switch (js)
 		{
-		case join_status::joinable: return "";
-		case join_status::detached: return "detached";
-		case join_status::zombie: return "zombie";
-		case join_status::exited: return "exited";
+		case ppu_join_status::joinable: return "";
+		case ppu_join_status::detached: return "detached";
+		case ppu_join_status::zombie: return "zombie";
+		case ppu_join_status::exited: return "exited";
+		case ppu_join_status::max: break;
 		}
 
 		return unknown;
@@ -424,23 +417,12 @@ extern bool ppu_patch(u32 addr, u32 value)
 	return true;
 }
 
-void ppu_thread::on_cleanup(named_thread<ppu_thread>* _this)
-{
-	// Remove thread id
-	idm::remove<named_thread<ppu_thread>>(_this->id);
-}
-
-std::string ppu_thread::get_name() const
-{
-	return fmt::format("PPU[0x%x] Thread (%s)", id, ppu_name.get());
-}
-
 std::string ppu_thread::dump() const
 {
 	std::string ret = cpu_thread::dump();
 	fmt::append(ret, "Priority: %d\n", +prio);
 	fmt::append(ret, "Stack: 0x%x..0x%x\n", stack_addr, stack_addr + stack_size - 1);
-	fmt::append(ret, "Joiner: %s\n", join_status(joiner.load()));
+	fmt::append(ret, "Joiner: %s\n", joiner.load());
 	fmt::append(ret, "Commands: %u\n", cmd_queue.size());
 
 	const char* _func = current_function;
@@ -716,9 +698,9 @@ ppu_thread::ppu_thread(const ppu_thread_params& param, std::string_view name, u3
 	, prio(prio)
 	, stack_size(param.stack_size)
 	, stack_addr(param.stack_addr)
-	, joiner(-!!detached)
+	, joiner(detached != 0 ? ppu_join_status::detached : ppu_join_status::joinable)
 	, start_time(get_guest_system_time())
-	, ppu_name(name)
+	, ppu_tname(stx::shared_cptr<std::string>::make(name))
 {
 	gpr[1] = stack_addr + stack_size - 0x70;
 
@@ -830,7 +812,15 @@ void ppu_thread::fast_call(u32 addr, u32 rtoc)
 	g_tls_log_prefix = []
 	{
 		const auto _this = static_cast<ppu_thread*>(get_current_cpu_thread());
-		return fmt::format("%s [0x%08x]", thread_ctrl::get_name(), _this->cia);
+
+		static thread_local stx::shared_cptr<std::string> name_cache;
+
+		if (!_this->ppu_tname.is_equal(name_cache)) [[unlikely]]
+		{
+			name_cache = _this->ppu_tname.load();
+		}
+
+		return fmt::format("PPU[0x%x] Thread (%s) [0x%08x]", _this->id, *name_cache.get(), _this->cia);
 	};
 
 	auto at_ret = [&]()
@@ -862,16 +852,7 @@ void ppu_thread::fast_call(u32 addr, u32 rtoc)
 		}
 	};
 
-	try
-	{
-		exec_task();
-	}
-	catch (...)
-	{
-		at_ret();
-		throw;
-	}
-
+	exec_task();
 	at_ret();
 }
 
@@ -913,7 +894,7 @@ void ppu_thread::stack_pop_verbose(u32 addr, u32 size) noexcept
 			return;
 		}
 
-		context.gpr[1] = vm::_ref<nse_t<u32>>(context.gpr[1] + size);
+		context.gpr[1] = vm::_ref<nse_t<u32>>(static_cast<u32>(context.gpr[1]) + size);
 		return;
 	}
 
@@ -1377,8 +1358,8 @@ extern void ppu_initialize(const ppu_module& info)
 		{
 			if (auto sc = ppu_get_syscall(index))
 			{
-				link_table.emplace(fmt::format("%s", ppu_syscall_code(index)), reinterpret_cast<u64>(sc));
-				link_table.emplace(fmt::format("syscall_%u", index), reinterpret_cast<u64>(sc));
+				link_table.emplace(fmt::format("%s", ppu_syscall_code(index)), reinterpret_cast<u64>(ppu_execute_syscall));
+				link_table.emplace(fmt::format("syscall_%u", index), reinterpret_cast<u64>(ppu_execute_syscall));
 			}
 		}
 
@@ -1448,12 +1429,6 @@ extern void ppu_initialize(const ppu_module& info)
 	// Compiler mutex (global)
 	static shared_mutex jmutex;
 
-	// Get jit core allocator instance
-	const auto jcores = g_fxo->get<jit_core_allocator>();
-
-	// Worker threads
-	std::vector<std::thread> jthreads;
-
 	// Global variables to initialize
 	std::vector<std::pair<std::string, u64>> globals;
 
@@ -1462,6 +1437,15 @@ extern void ppu_initialize(const ppu_module& info)
 
 	// Difference between function name and current location
 	const u32 reloc = info.name.empty() ? 0 : info.segs.at(0).addr;
+
+	// Info sent to threads
+	std::vector<std::pair<std::string, ppu_module>> workload;
+
+	// Info to load to main JIT instance (true - compiled)
+	std::vector<std::pair<std::string, bool>> link_workload;
+
+	// Sync variable to acquire workloads
+	atomic_t<u32> work_cv = 0;
 
 	while (jit_mod.vars.empty() && fpos < info.funcs.size())
 	{
@@ -1612,34 +1596,56 @@ extern void ppu_initialize(const ppu_module& info)
 			globals.emplace_back(fmt::format("__seg%u_%x", i, suffix), info.segs[i].addr);
 		}
 
+		link_workload.emplace_back(obj_name, false);
+
 		// Check object file
 		if (fs::is_file(cache_path + obj_name + ".gz") || fs::is_file(cache_path + obj_name))
 		{
 			if (!jit)
 			{
-				ppu_log.success("LLVM: Already exists: %s", obj_name);
+				ppu_log.success("LLVM: Module exists: %s", obj_name);
 				continue;
 			}
 
-			std::lock_guard lock(jmutex);
-			jit->add(cache_path + obj_name);
-
-			ppu_log.success("LLVM: Loaded module %s", obj_name);
 			continue;
 		}
 
+		// Adjust information (is_compiled)
+		link_workload.back().second = true;
+
+		// Fill workload list for compilation
+		workload.emplace_back(std::move(obj_name), std::move(part));
+
 		// Update progress dialog
 		g_progr_ptotal++;
+	}
 
-		// Create worker thread for compilation
-		jthreads.emplace_back([&jit, obj_name = obj_name, part = std::move(part), &cache_path, jcores]()
+	// Create worker threads for compilation (TODO: how many threads)
+	{
+		u32 thread_count = Emu.GetMaxThreads();
+
+		if (workload.size() < thread_count)
+		{
+			thread_count = ::size32(workload);
+		}
+
+		struct thread_index_allocator
+		{
+			atomic_t<u64> index = 0;
+		};
+
+		named_thread_group threads(fmt::format("PPUW.%u.", ++g_fxo->get<thread_index_allocator>()->index), thread_count, [&]()
 		{
 			// Set low priority
 			thread_ctrl::set_native_priority(-1);
 
-			// Allocate "core"
+			for (u32 i = work_cv++; i < workload.size(); i = work_cv++)
 			{
-				std::lock_guard jlock(jcores->sem);
+				// Keep allocating workload
+				const auto [obj_name, part] = std::as_const(workload)[i];
+
+				// Allocate "core"
+				std::lock_guard jlock(g_fxo->get<jit_core_allocator>()->sem);
 
 				if (!Emu.IsStopped())
 				{
@@ -1648,28 +1654,37 @@ extern void ppu_initialize(const ppu_module& info)
 					// Use another JIT instance
 					jit_compiler jit2({}, g_cfg.core.llvm_cpu, 0x1);
 					ppu_initialize2(jit2, part, cache_path, obj_name);
+
+					ppu_log.success("LLVM: Compiled module %s", obj_name);
 				}
 
 				g_progr_pdone++;
 			}
+		});
 
-			if (Emu.IsStopped() || !jit || !fs::is_file(cache_path + obj_name + ".gz"))
+		threads.join();
+
+		if (Emu.IsStopped() || !get_current_cpu_thread())
+		{
+			return;
+		}
+
+		std::lock_guard lock(jmutex);
+
+		for (auto [obj_name, is_compiled] : link_workload)
+		{
+			if (Emu.IsStopped())
 			{
-				return;
+				break;
 			}
 
-			// Proceed with original JIT instance
-			std::lock_guard lock(jmutex);
 			jit->add(cache_path + obj_name);
 
-			ppu_log.success("LLVM: Compiled module %s", obj_name);
-		});
-	}
-
-	// Join worker threads
-	for (auto& thread : jthreads)
-	{
-		thread.join();
+			if (!is_compiled)
+			{
+				ppu_log.success("LLVM: Loaded module %s", obj_name);
+			}
+		}
 	}
 
 	if (Emu.IsStopped() || !get_current_cpu_thread())

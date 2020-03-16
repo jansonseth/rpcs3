@@ -1008,11 +1008,6 @@ spu_imm_table_t::spu_imm_table_t()
 	}
 }
 
-std::string spu_thread::get_name() const
-{
-	return fmt::format("%sSPU[0x%07x] Thread (%s)", offset >= RAW_SPU_BASE_ADDR ? "Raw" : "", lv2_id, spu_name.get());
-}
-
 std::string spu_thread::dump() const
 {
 	std::string ret = cpu_thread::dump();
@@ -1101,19 +1096,22 @@ void spu_thread::cpu_stop()
 {
 	if (!group && offset >= RAW_SPU_BASE_ADDR)
 	{
-		status_npc.fetch_op([this](status_npc_sync_var& state)
+		if (status_npc.fetch_op([this](status_npc_sync_var& state)
 		{
 			if (state.status & SPU_STATUS_RUNNING)
 			{
 				// Save next PC and current SPU Interrupt Status
 				// Used only by RunCtrl stop requests
 				state.status &= ~SPU_STATUS_RUNNING;
-				state.npc =	pc | +interrupts_enabled;
+				state.npc = pc | +interrupts_enabled;
 				return true;
 			}
 
 			return false;
-		});
+		}).second)
+		{
+			status_npc.notify_one();
+		}
 	}
 	else if (group && is_stopped())
 	{
@@ -1163,7 +1161,15 @@ void spu_thread::cpu_task()
 	g_tls_log_prefix = []
 	{
 		const auto cpu = static_cast<spu_thread*>(get_current_cpu_thread());
-		return fmt::format("%s [0x%05x]", thread_ctrl::get_name(), cpu->pc);
+
+		static thread_local stx::shared_cptr<std::string> name_cache;
+
+		if (!cpu->spu_tname.is_equal(name_cache)) [[unlikely]]
+		{
+			name_cache = cpu->spu_tname.load();
+		}
+
+		return fmt::format("%sSPU[0x%07x] Thread (%s) [0x%05x]", cpu->offset >= RAW_SPU_BASE_ADDR ? "Raw" : "", cpu->lv2_id, *name_cache.get(), cpu->pc);
 	};
 
 	if (jit)
@@ -1237,7 +1243,7 @@ spu_thread::spu_thread(vm::addr_t ls, lv2_spu_group* group, u32 index, std::stri
 	, offset(ls)
 	, group(group)
 	, lv2_id(lv2_id)
-	, spu_name(name)
+	, spu_tname(stx::shared_cptr<std::string>::make(name))
 {
 	if (g_cfg.core.spu_decoder == spu_decoder_type::asmjit)
 	{
@@ -2839,6 +2845,8 @@ bool spu_thread::stop_and_signal(u32 code)
 			state.npc = (pc + 4) | +interrupts_enabled;
 		});
 
+		status_npc.notify_one();
+
 		int_ctrl[2].set(SPU_INT2_STAT_SPU_STOP_AND_SIGNAL_INT);
 		check_state();
 		return true;
@@ -3192,6 +3200,8 @@ void spu_thread::halt()
 			state.status &= ~SPU_STATUS_RUNNING;
 			state.npc = pc | +interrupts_enabled;
 		});
+
+		status_npc.notify_one();
 
 		int_ctrl[2].set(SPU_INT2_STAT_SPU_HALT_OR_STEP_INT);
 

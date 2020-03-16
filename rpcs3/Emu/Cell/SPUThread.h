@@ -498,7 +498,6 @@ public:
 class spu_thread : public cpu_thread
 {
 public:
-	virtual std::string get_name() const override;
 	virtual std::string dump() const override;
 	virtual void cpu_task() override final;
 	virtual void cpu_mem() override;
@@ -581,6 +580,7 @@ public:
 	u32 ch_dec_value; // written decrementer value
 
 	atomic_t<u32> run_ctrl; // SPU Run Control register (only provided to get latest data written)
+	shared_mutex run_ctrl_mtx;
 
 	struct alignas(8) status_npc_sync_var
 	{
@@ -588,7 +588,7 @@ public:
 		u32 npc; // SPU Next Program Counter register
 	};
 
-	atomic_t<status_npc_sync_var> status_npc; 
+	atomic_t<status_npc_sync_var> status_npc;
 
 	std::array<spu_int_ctrl_t, 3> int_ctrl; // SPU Class 0, 1, 2 Interrupt Management
 
@@ -602,7 +602,8 @@ private:
 public:
 	const u32 lv2_id; // The actual id that is used by syscalls
 
-	lf_value<std::string> spu_name; // Thread name
+	// Thread name
+	stx::atomic_cptr<std::string> spu_tname;
 
 	std::unique_ptr<class spu_recompiler_base> jit; // Recompiler instance
 

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 #include "TAR.h"
 
@@ -30,7 +30,7 @@ int octalToDecimal(int octalNumber)
 	{
 		rem = octalNumber % 10;
 		octalNumber /= 10;
-		decimalNumber += rem * pow(8, i);
+		decimalNumber += rem * (1 << (i * 3));
 		++i;
 	}
 	return decimalNumber;
@@ -68,7 +68,7 @@ fs::file tar_object::get_file(std::string path)
 		{
 			TARHeader header = read_header(largest_offset);
 
-			if (std::string(header.magic).find("ustar") != std::string::npos)
+			if (std::string(header.magic).find("ustar") != umax)
 				m_map[header.name] = largest_offset;
 
 			int size = octalToDecimal(atoi(header.size));

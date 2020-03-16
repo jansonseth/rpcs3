@@ -114,7 +114,9 @@ void cellSpursModuleExit(spu_thread& spu)
 {
 	auto ctxt = vm::_ptr<SpursKernelContext>(spu.offset + 0x100);
 	spu.pc = ctxt->exitToKernelAddr;
-	throw SpursModuleExit();
+
+	// TODO: use g_escape for actual long jump
+	//throw SpursModuleExit();
 }
 
 // Execute a DMA operation
@@ -728,7 +730,6 @@ bool spursSysServiceEntry(spu_thread& spu)
 	auto arg = spu.gpr[4]._u64[1];
 	auto pollStatus = spu.gpr[5]._u32[3];
 
-	try
 	{
 		if (ctxt->wklCurrentId == CELL_SPURS_SYS_SERVICE_WORKLOAD_ID)
 		{
@@ -741,10 +742,6 @@ bool spursSysServiceEntry(spu_thread& spu)
 		}
 
 		cellSpursModuleExit(spu);
-	}
-
-	catch (SpursModuleExit)
-	{
 	}
 
 	return false;
@@ -1207,7 +1204,7 @@ void spursSysServiceTraceUpdate(spu_thread& spu, SpursKernelContext* ctxt, u32 a
 		}
 		else
 		{
-			std::memcpy(vm::base(spu.offset + 0x2C00), vm::base(spurs->traceBuffer.addr() & -0x4), 0x80);
+			std::memcpy(vm::base(spu.offset + 0x2C00), vm::base(vm::cast(spurs->traceBuffer.addr(), HERE) & -0x4), 0x80);
 			auto traceBuffer = vm::_ptr<CellSpursTraceInfo>(spu.offset + 0x2C00);
 			ctxt->traceMsgCount = traceBuffer->count[ctxt->spuNum];
 		}
@@ -1326,16 +1323,12 @@ bool spursTasksetEntry(spu_thread& spu)
 	//spu.RegisterHleFunction(CELL_SPURS_TASKSET_PM_ENTRY_ADDR, spursTasksetEntry);
 	//spu.RegisterHleFunction(ctxt->syscallAddr, spursTasksetSyscallEntry);
 
-	try
 	{
 		// Initialise the taskset policy module
 		spursTasksetInit(spu, pollStatus);
 
 		// Dispatch
 		spursTasksetDispatch(spu);
-	}
-	catch (SpursModuleExit)
-	{
 	}
 
 	return false;
@@ -1346,7 +1339,6 @@ bool spursTasksetSyscallEntry(spu_thread& spu)
 {
 	auto ctxt = vm::_ptr<SpursTasksetContext>(spu.offset + 0x2700);
 
-	try
 	{
 		// Save task context
 		ctxt->savedContextLr = spu.gpr[0];
@@ -1364,9 +1356,6 @@ bool spursTasksetSyscallEntry(spu_thread& spu)
 		//if (spu.m_is_branch == false) {
 		//    spursTasksetResumeTask(spu);
 		//}
-	}
-	catch (SpursModuleExit)
-	{
 	}
 
 	return false;
@@ -1670,7 +1659,7 @@ s32 spursTasketSaveTaskContext(spu_thread& spu)
 		return CELL_SPURS_TASK_ERROR_STAT;
 	}
 
-	u32 allocLsBlocks = taskInfo->context_save_storage_and_alloc_ls_blocks & 0x7F;
+	u32 allocLsBlocks = static_cast<u32>(taskInfo->context_save_storage_and_alloc_ls_blocks & 0x7F);
 	u32 lsBlocks = 0;
 	v128 ls_pattern = v128::from64r(taskInfo->ls_pattern._u64[0], taskInfo->ls_pattern._u64[1]);
 	for (auto i = 0; i < 128; i++)

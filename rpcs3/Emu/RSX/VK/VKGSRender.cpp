@@ -104,18 +104,21 @@ namespace vk
 
 		case rsx::surface_color_format::b8:
 		{
-			VkComponentMapping no_alpha = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_ONE };
+			const VkComponentMapping no_alpha = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_ONE };
 			return std::make_pair(VK_FORMAT_R8_UNORM, no_alpha);
 		}
 
 		case rsx::surface_color_format::g8b8:
 		{
-			VkComponentMapping gb_rg = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G };
+			const VkComponentMapping gb_rg = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G };
 			return std::make_pair(VK_FORMAT_R8G8_UNORM, gb_rg);
 		}
 
 		case rsx::surface_color_format::x32:
-			return std::make_pair(VK_FORMAT_R32_SFLOAT, vk::default_component_map());
+		{
+			const VkComponentMapping rrrr = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R };
+			return std::make_pair(VK_FORMAT_R32_SFLOAT, rrrr);
+		}
 
 		default:
 			rsx_log.error("Surface color buffer: Unsupported surface color format (0x%x)", static_cast<u32>(color_format));
@@ -534,7 +537,14 @@ VKGSRender::VKGSRender() : GSRender()
 	m_video_output_pass = std::make_unique<vk::video_out_calibration_pass>();
 	m_video_output_pass->create(*m_device);
 
-	m_prog_buffer = std::make_unique<VKProgramBuffer>();
+	m_prog_buffer = std::make_unique<VKProgramBuffer>
+	(
+		[this](const vk::pipeline_props& props, const RSXVertexProgram& vp, const RSXFragmentProgram& fp)
+		{
+			// Program was linked or queued for linking
+			m_shaders_cache->store(props, vp, fp);
+		}
+	);
 
 	if (g_cfg.video.disable_vertex_cache || g_cfg.video.multithreaded_rsx)
 		m_vertex_cache = std::make_unique<vk::null_vertex_cache>();
@@ -724,7 +734,7 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 		if (g_fxo->get<rsx::dma_manager>()->is_current_thread())
 		{
 			// The offloader thread cannot handle flush requests
-			verify(HERE), m_queue_status.load() == flush_queue_state::ok;
+			verify(HERE), !(m_queue_status & flush_queue_state::deadlock);
 
 			m_offloader_fault_range = g_fxo->get<rsx::dma_manager>()->get_fault_range(is_writing);
 			m_offloader_fault_cause = (is_writing) ? rsx::invalidation_cause::write : rsx::invalidation_cause::read;
@@ -1052,31 +1062,26 @@ void VKGSRender::update_draw_state()
 
 void VKGSRender::begin_render_pass()
 {
-	if (m_render_pass_open)
-		return;
-
-	const auto renderpass = (m_cached_renderpass)? m_cached_renderpass : vk::get_renderpass(*m_device, m_current_renderpass_key);
-
-	VkRenderPassBeginInfo rp_begin = {};
-	rp_begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-	rp_begin.renderPass = renderpass;
-	rp_begin.framebuffer = m_draw_fbo->value;
-	rp_begin.renderArea.offset.x = 0;
-	rp_begin.renderArea.offset.y = 0;
-	rp_begin.renderArea.extent.width = m_draw_fbo->width();
-	rp_begin.renderArea.extent.height = m_draw_fbo->height();
-
-	vkCmdBeginRenderPass(*m_current_command_buffer, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
-	m_render_pass_open = true;
+	vk::begin_renderpass(
+		*m_current_command_buffer,
+		get_render_pass(),
+		m_draw_fbo->value,
+		{ positionu{0u, 0u}, sizeu{m_draw_fbo->width(), m_draw_fbo->height()} });
 }
 
 void VKGSRender::close_render_pass()
 {
-	if (!m_render_pass_open)
-		return;
+	vk::end_renderpass(*m_current_command_buffer);
+}
 
-	vkCmdEndRenderPass(*m_current_command_buffer);
-	m_render_pass_open = false;
+VkRenderPass VKGSRender::get_render_pass()
+{
+	if (!m_cached_renderpass)
+	{
+		m_cached_renderpass = vk::get_renderpass(*m_device, m_current_renderpass_key);
+	}
+
+	return m_cached_renderpass;
 }
 
 void VKGSRender::emit_geometry(u32 sub_index)
@@ -1189,7 +1194,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		m_program->bind_uniform(m_vertex_layout_storage->value, binding_table.vertex_buffers_first_bind_slot + 2, m_current_frame->descriptor_set);
 	}
 
-	if (!m_render_pass_open)
+	if (!m_current_subdraw_id++)
 	{
 		vkCmdBindPipeline(*m_current_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_program->pipeline);
 		update_draw_state();
@@ -1847,6 +1852,8 @@ void VKGSRender::end()
 	check_heap_status(VK_HEAP_CHECK_VERTEX_STORAGE | VK_HEAP_CHECK_VERTEX_LAYOUT_STORAGE);
 
 	u32 sub_index = 0;
+	m_current_subdraw_id = 0;
+
 	rsx::method_registers.current_draw_clause.begin();
 	do
 	{
@@ -1859,9 +1866,6 @@ void VKGSRender::end()
 		m_device->cmdEndConditionalRenderingEXT(*m_current_command_buffer);
 		m_current_command_buffer->flags &= ~(vk::command_buffer::cb_has_conditional_render);
 	}
-
-	// Close any open passes unconditionally
-	close_render_pass();
 
 	m_rtts.on_write(m_framebuffer_layout.color_write_enabled.data(), m_framebuffer_layout.zeta_write_enabled);
 
@@ -2147,7 +2151,6 @@ void VKGSRender::clear_surface(u32 mask)
 	{
 		begin_render_pass();
 		vkCmdClearAttachments(*m_current_command_buffer, ::size32(clear_descriptors), clear_descriptors.data(), 1, &region);
-		close_render_pass();
 	}
 }
 
@@ -2265,7 +2268,13 @@ void VKGSRender::do_local_task(rsx::FIFO_state state)
 		m_queue_status.clear(flush_queue_state::deadlock);
 	}
 
-	if (m_flush_requests.pending())
+	if (m_queue_status & flush_queue_state::flushing)
+	{
+		// Abort recursive CB submit requests.
+		// When flushing flag is already set, only deadlock events may be processed.
+		return;
+	}
+	else if (m_flush_requests.pending())
 	{
 		if (m_flush_queue_mutex.try_lock())
 		{
@@ -2470,18 +2479,12 @@ bool VKGSRender::load_program()
 	vertex_program.skip_vertex_input_check = true;
 	fragment_program.unnormalized_coords = 0;
 	m_program = m_prog_buffer->get_graphics_pipeline(vertex_program, fragment_program, properties,
-			!g_cfg.video.disable_asynchronous_shader_compiler, *m_device, pipeline_layout).get();
+			!g_cfg.video.disable_asynchronous_shader_compiler, true, *m_device, pipeline_layout).get();
 
 	vk::leave_uninterruptible();
 
 	if (m_prog_buffer->check_cache_missed())
 	{
-		if (m_prog_buffer->check_program_linked_flag())
-		{
-			// Program was linked or queued for linking
-			m_shaders_cache->store(properties, vertex_program, fragment_program);
-		}
-
 		// Notify the user with HUD notification
 		if (g_cfg.misc.show_shader_compilation_hint)
 		{
@@ -2620,9 +2623,10 @@ void VKGSRender::update_vertex_env(u32 id, const vk::vertex_upload_info& vertex_
 {
 	// Actual allocation must have been done previously
 	u32 base_offset;
+	const u32 offset32 = static_cast<u32>(m_vertex_layout_stream_info.offset);
+	const u32 range32 = static_cast<u32>(m_vertex_layout_stream_info.range);
 
-	if (!m_vertex_layout_storage ||
-		!m_vertex_layout_storage->in_range(m_vertex_layout_stream_info.offset, m_vertex_layout_stream_info.range, base_offset))
+	if (!m_vertex_layout_storage || !m_vertex_layout_storage->in_range(offset32, range32, base_offset))
 	{
 		verify("Incompatible driver (MacOS?)" HERE), m_texbuffer_view_size >= m_vertex_layout_stream_info.range;
 
@@ -2667,6 +2671,8 @@ void VKGSRender::init_buffers(rsx::framebuffer_creation_context context, bool)
 
 void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore, VkPipelineStageFlags pipeline_stage_flags)
 {
+	verify("Recursive calls to submit the current commandbuffer will cause a deadlock" HERE), !m_queue_status.test_and_set(flush_queue_state::flushing);
+
 	// Workaround for deadlock occuring during RSX offloader fault
 	// TODO: Restructure command submission infrastructure to avoid this condition
 	const bool sync_success = g_fxo->get<rsx::dma_manager>()->sync();
@@ -2715,7 +2721,7 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 #endif
 
 	// End any active renderpasses; the caller should handle reopening
-	if (m_render_pass_open)
+	if (vk::is_renderpass_open(*m_current_command_buffer))
 	{
 		close_render_pass();
 	}
@@ -2738,6 +2744,8 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 	{
 		verify(HERE), m_current_command_buffer->submit_fence->flushed;
 	}
+
+	m_queue_status.clear(flush_queue_state::flushing);
 }
 
 void VKGSRender::open_command_buffer()

@@ -90,6 +90,9 @@ public:
 	explicit pad_settings_dialog(QWidget *parent = nullptr, const GameInfo *game = nullptr);
 	~pad_settings_dialog();
 
+public Q_SLOTS:
+	void apply_led_settings(int colorR, int colorG, int colorB, bool led_low_battery_blink, bool led_battery_indicator, int led_battery_indicator_brightness);
+
 private Q_SLOTS:
 	void OnPadButtonClicked(int id);
 	void OnTabChanged(int index);
@@ -112,6 +115,7 @@ private:
 	bool m_enable_rumble{ false };
 	bool m_enable_deadzones{ false };
 	bool m_enable_led{ false };
+	bool m_enable_battery{ false };
 
 	// Button Mapping
 	QButtonGroup* m_padButtons = nullptr;

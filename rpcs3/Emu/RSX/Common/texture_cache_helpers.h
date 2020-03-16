@@ -73,6 +73,14 @@ namespace rsx
 		}
 	};
 
+	struct blit_target_properties
+	{
+		bool use_dma_region;
+		u32 offset;
+		u32 width;
+		u32 height;
+	};
+
 	struct texture_cache_search_options
 	{
 		u8 lookup_mask = 0xff;
@@ -166,6 +174,64 @@ namespace rsx
 			}
 		}
 
+		static blit_target_properties get_optimal_blit_target_properties(
+			bool src_is_render_target,
+			address_range dst_range,
+			u32 dst_pitch,
+			const sizeu src_dimensions,
+			const sizeu dst_dimensions)
+		{
+			if (get_location(dst_range.start) == CELL_GCM_LOCATION_LOCAL)
+			{
+				// Check if this is a blit to the output buffer
+				// TODO: This can be used to implement reference tracking to possibly avoid downscaling
+				const auto renderer = rsx::get_current_renderer();
+				for (u32 i = 0; i < renderer->display_buffers_count; ++i)
+				{
+					const auto& buffer = renderer->display_buffers[i];
+					const u32 pitch = buffer.pitch? static_cast<u32>(buffer.pitch) : g_fxo->get<rsx::avconf>()->get_bpp() * buffer.width;
+					if (pitch != dst_pitch)
+					{
+						continue;
+					}
+
+					const auto buffer_range = address_range::start_length(rsx::constants::local_mem_base + buffer.offset, pitch * buffer.height);
+					if (dst_range.inside(buffer_range))
+					{
+						// Match found
+						return { false, buffer_range.start, buffer.width, buffer.height };
+					}
+
+					if (dst_range.overlaps(buffer_range)) [[unlikely]]
+					{
+						// The range clips the destination but does not fit inside it
+						// Use DMA stream to optimize the flush that is likely to happen when flipping
+						return { true };
+					}
+				}
+			}
+
+			if (src_is_render_target)
+			{
+				// Attempt to optimize...
+				if (dst_dimensions.width == 1280 || dst_dimensions.width == 2560) [[likely]]
+				{
+					// Optimizations table based on common width/height pairings. If we guess wrong, the upload resolver will fix it anyway
+					// TODO: Add more entries based on empirical data
+					const auto optimal_height = std::max(dst_dimensions.height, 720u);
+					return { false, 0, dst_dimensions.width, optimal_height };
+				}
+
+				if (dst_dimensions.width == src_dimensions.width)
+				{
+					const auto optimal_height = std::max(dst_dimensions.height, src_dimensions.height);
+					return { false, 0, dst_dimensions.width, optimal_height };
+				}
+			}
+
+			return { false, 0, dst_dimensions.width, dst_dimensions.height };
+		}
+
 		template<typename section_storage_type, typename copy_region_type, typename surface_store_list_type>
 		void gather_texture_slices(
 			std::vector<copy_region_type>& out,
@@ -210,12 +276,6 @@ namespace rsx
 
 			auto add_rtt_resource = [&](auto& section, u16 slice)
 			{
-				if (section.is_depth != is_depth)
-				{
-					// TODO
-					return;
-				}
-
 				const u32 slice_begin = (slice * attr.slice_h);
 				const u32 slice_end = (slice_begin + attr.height);
 
@@ -266,12 +326,6 @@ namespace rsx
 
 			auto add_local_resource = [&](auto& section, u32 address, u16 slice, bool scaling = true)
 			{
-				if (section->is_depth_texture() != is_depth)
-				{
-					// TODO
-					return;
-				}
-
 				// Intersect this resource with the original one
 				const auto section_bpp = get_format_block_size_in_bytes(section->get_gcm_format());
 				const auto normalized_width = (section->get_width() * section_bpp) / attr.bpp;
@@ -534,20 +588,54 @@ namespace rsx
 		{
 			verify(HERE), (select_hint & 0x1) == select_hint;
 
-			bool is_depth;
+			bool is_depth = (select_hint == 0) ? fbos.back().is_depth : local.back()->is_depth_texture();
+			bool aspect_mismatch = false;
 			auto attr2 = attr;
 
-			if (is_depth = (select_hint == 0) ? fbos.back().is_depth : local.back()->is_depth_texture();
-				is_depth)
+			// Check for mixed sources with aspect mismatch
+			// NOTE: If the last texture is a perfect match, this method would not have been called which means at least one transfer has to occur
+			if ((fbos.size() + local.size()) > 1) [[unlikely]]
 			{
+				for (const auto& tex : local)
+				{
+					if (tex->is_depth_texture() != is_depth)
+					{
+						aspect_mismatch = true;
+						break;
+					}
+				}
+
+				if (!aspect_mismatch) [[likely]]
+				{
+					for (const auto& surface : fbos)
+					{
+						if (surface.is_depth != is_depth)
+						{
+							aspect_mismatch = true;
+							break;
+						}
+					}
+				}
+			}
+
+			if (aspect_mismatch)
+			{
+				// Override with the requested format
+				is_depth = is_gcm_depth_format(attr.gcm_format);
+			}
+			else if (is_depth)
+			{
+				// Depth format textures were found. Check if the data can be bitcast without conversion.
 				if (const auto suggested_format = get_compatible_depth_format(attr.gcm_format);
 					!is_gcm_depth_format(suggested_format))
 				{
-					// Failed!
+					// Requested format cannot be directly read from a depth texture.
+					// Typeless conversion will be performed to make data accessible.
 					is_depth = false;
 				}
 				else
 				{
+					// Replace request format with one that is compatible with existing data.
 					attr2.gcm_format = suggested_format;
 				}
 			}

@@ -18,6 +18,7 @@
 #include "sys_memory.h"
 #include "sys_mmapper.h"
 #include "sys_event.h"
+#include "sys_fs.h"
 
 LOG_CHANNEL(sys_spu);
 
@@ -217,12 +218,19 @@ error_code sys_spu_image_open(ppu_thread& ppu, vm::ptr<sys_spu_image> img, vm::c
 
 	sys_spu.warning("sys_spu_image_open(img=*0x%x, path=%s)", img, path);
 
-	const fs::file elf_file = decrypt_self(fs::file(vfs::get(path.get_ptr())), g_fxo->get<loaded_npdrm_keys>()->devKlic.data());
+	auto [fs_error, ppath, file] = lv2_file::open(path.get_ptr(), 0, 0);
+
+	if (fs_error)
+	{
+		return {fs_error, path};
+	}
+
+	const fs::file elf_file = decrypt_self(std::move(file), g_fxo->get<loaded_npdrm_keys>()->devKlic.data());
 
 	if (!elf_file)
 	{
-		sys_spu.error("sys_spu_image_open() error: failed to open %s!", path);
-		return CELL_ENOENT;
+		sys_spu.error("sys_spu_image_open(): file %s is illegal for SPU image!", path);
+		return {CELL_ENOEXEC, path};
 	}
 
 	img->load(elf_file);
@@ -1254,6 +1262,11 @@ error_code sys_spu_thread_group_connect_event(ppu_thread& ppu, u32 id, u32 eq, u
 		return CELL_EINVAL;
 	}
 
+	if (et == SYS_SPU_THREAD_GROUP_EVENT_SYSTEM_MODULE && !(group->type & SYS_SPU_THREAD_GROUP_TYPE_COOPERATE_WITH_SYSTEM))
+	{
+		return CELL_EINVAL;
+	}
+
 	const auto queue = idm::get<lv2_obj, lv2_event_queue>(eq);
 
 	std::lock_guard lock(group->mutex);
@@ -1690,32 +1703,33 @@ error_code sys_raw_spu_destroy(ppu_thread& ppu, u32 id)
 	thread->state += cpu_flag::stop;
 
 	// Kernel objects which must be removed
-	std::unordered_map<lv2_obj*, u32, pointer_hash<lv2_obj, alignof(void*)>> to_remove;
+	std::vector<std::pair<std::shared_ptr<lv2_obj>, u32>> to_remove;
 
 	// Clear interrupt handlers
 	for (auto& intr : thread->int_ctrl)
 	{
-		if (const auto tag = intr.tag.lock())
+		if (auto tag = intr.tag.lock())
 		{
 			if (auto handler = tag->handler.lock())
 			{
 				// SLEEP
 				handler->join();
-				to_remove.emplace(handler.get(), 0);
+				to_remove.emplace_back(std::move(handler), 0);
 			}
 
-			to_remove.emplace(tag.get(), 0);
+			to_remove.emplace_back(std::move(tag), 0);
 		}
 	}
 
 	// Scan all kernel objects to determine IDs
 	idm::select<lv2_obj>([&](u32 id, lv2_obj& obj)
 	{
-		const auto found = to_remove.find(&obj);
-
-		if (found != to_remove.end())
+		for (auto& pair : to_remove)
 		{
-			found->second = id;
+			if (pair.first.get() == std::addressof(obj))
+			{
+				pair.second = id;
+			}
 		}
 	});
 
@@ -1723,12 +1737,17 @@ error_code sys_raw_spu_destroy(ppu_thread& ppu, u32 id)
 	for (auto&& pair : to_remove)
 	{
 		if (pair.second >> 24 == 0xa)
-			idm::remove<lv2_obj, lv2_int_tag>(pair.second);
+			idm::remove_verify<lv2_obj, lv2_int_tag>(pair.second, std::move(pair.first));
 		if (pair.second >> 24 == 0xb)
-			idm::remove<lv2_obj, lv2_int_serv>(pair.second);
+			idm::remove_verify<lv2_obj, lv2_int_serv>(pair.second, std::move(pair.first));
 	}
 
-	idm::remove<named_thread<spu_thread>>(thread->id);
+	if (!idm::remove_verify<named_thread<spu_thread>>(thread->id, std::move(thread)))
+	{
+		// Other thread destroyed beforehead
+		return CELL_ESRCH;
+	}
+
 	return CELL_OK;
 }
 

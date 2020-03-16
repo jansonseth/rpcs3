@@ -96,7 +96,7 @@ struct cfg_root : cfg::node
 
 		cfg::_enum<video_resolution> resolution{ this, "Resolution", video_resolution::_720 };
 		cfg::_enum<video_aspect> aspect_ratio{ this, "Aspect ratio", video_aspect::_16_9 };
-		cfg::_enum<frame_limit_type> frame_limit{ this, "Frame limit", frame_limit_type::none };
+		cfg::_enum<frame_limit_type> frame_limit{ this, "Frame limit", frame_limit_type::none, true };
 		cfg::_enum<msaa_level> antialiasing_level{ this, "MSAA", msaa_level::_auto };
 
 		cfg::_bool write_color_buffers{ this, "Write Color Buffers" };
@@ -109,14 +109,14 @@ struct cfg_root : cfg::node
 		cfg::_bool overlay{ this, "Debug overlay" };
 		cfg::_bool gl_legacy_buffers{ this, "Use Legacy OpenGL Buffers" };
 		cfg::_bool use_gpu_texture_scaling{ this, "Use GPU texture scaling", false };
-		cfg::_bool stretch_to_display_area{ this, "Stretch To Display Area" };
+		cfg::_bool stretch_to_display_area{ this, "Stretch To Display Area", false, true };
 		cfg::_bool force_high_precision_z_buffer{ this, "Force High Precision Z buffer" };
 		cfg::_bool strict_rendering_mode{ this, "Strict Rendering Mode" };
 		cfg::_bool disable_zcull_queries{ this, "Disable ZCull Occlusion Queries", false };
 		cfg::_bool disable_vertex_cache{ this, "Disable Vertex Cache", false };
 		cfg::_bool disable_FIFO_reordering{ this, "Disable FIFO Reordering", false };
 		cfg::_bool frame_skip_enabled{ this, "Enable Frame Skip", false };
-		cfg::_bool force_cpu_blit_processing{ this, "Force CPU Blit", false }; // Debugging option
+		cfg::_bool force_cpu_blit_processing{ this, "Force CPU Blit", false, true }; // Debugging option
 		cfg::_bool disable_on_disk_shader_cache{ this, "Disable On-Disk Shader Cache", false };
 		cfg::_bool disable_vulkan_mem_allocator{ this, "Disable Vulkan Memory Allocator", false };
 		cfg::_bool full_rgb_range_output{ this, "Use full RGB output range", true }; // Video out dynamic range
@@ -125,6 +125,7 @@ struct cfg_root : cfg::node
 		cfg::_bool disable_native_float16{ this, "Disable native float16 support", false };
 		cfg::_bool multithreaded_rsx{ this, "Multithreaded RSX", false };
 		cfg::_bool relaxed_zcull_sync{ this, "Relaxed ZCULL Sync", false };
+		cfg::_bool enable_3d{ this, "Enable 3D", false };
 		cfg::_int<1, 8> consequtive_frames_to_draw{ this, "Consecutive Frames To Draw", 1 };
 		cfg::_int<1, 8> consequtive_frames_to_skip{ this, "Consecutive Frames To Skip", 1 };
 		cfg::_int<50, 800> resolution_scale_percent{ this, "Resolution Scale", 100 };
@@ -152,7 +153,7 @@ struct cfg_root : cfg::node
 			cfg::_bool framerate_graph_enabled{ this, "Enable Framerate Graph", false, true };
 			cfg::_bool frametime_graph_enabled{ this, "Enable Frametime Graph", false, true };
 			cfg::_enum<detail_level> level{ this, "Detail level", detail_level::medium, true };
-			cfg::_int<30, 5000> update_interval{ this, "Metrics update interval (ms)", 350, true };
+			cfg::_int<1, 5000> update_interval{ this, "Metrics update interval (ms)", 350, true };
 			cfg::_int<4, 36> font_size{ this, "Font size (px)", 10, true };
 			cfg::_enum<screen_quadrant> position{ this, "Position", screen_quadrant::top_left, true };
 			cfg::string font{ this, "Font", "n023055ms.ttf", true };
@@ -234,11 +235,15 @@ struct cfg_root : cfg::node
 	{
 		node_net(cfg::node* _this) : cfg::node(_this, "Net") {}
 
-		cfg::_enum<CellNetCtlState> net_status{ this, "Connection status" };
-		cfg::string ip_address{ this, "IP address", "192.168.1.1" };
+		cfg::_enum<np_internet_status> net_active{this, "Internet enabled", np_internet_status::disabled};
+		cfg::string ip_address{this, "IP address", "0.0.0.0"};
+		cfg::string dns{this, "DNS address", "8.8.8.8"};
+		cfg::string swap_list{this, "IP swap list", ""};
 
-	} net{ this };
-
+		cfg::_enum<np_psn_status> psn_status{this, "PSN status", np_psn_status::disabled};
+		cfg::string psn_npid{this, "NPID", ""};
+	} net{this};
+	
 	struct node_misc : cfg::node
 	{
 		node_misc(cfg::node* _this) : cfg::node(_this, "Miscellaneous") {}

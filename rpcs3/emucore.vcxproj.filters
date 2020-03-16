@@ -72,6 +72,9 @@
     <Filter Include="Emu\GPU\RSX\Overlays\Shaders">
       <UniqueIdentifier>{f368580d-07bc-4c8b-b488-a4198f2dd17d}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Emu\NP">
+      <UniqueIdentifier>{652ce43e-72db-42cd-831a-0e194f67e731}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Crypto\aes.cpp">
@@ -137,7 +140,7 @@
     <ClCompile Include="..\Utilities\StrFmt.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
-    <ClCompile Include="..\Utilities\Log.cpp">
+    <ClCompile Include="util\logs.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
     <ClCompile Include="Emu\RSX\GSRender.cpp">
@@ -866,6 +869,15 @@
     <ClCompile Include="util\atomic2.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
+    <ClCompile Include="util\yaml.cpp">
+      <Filter>Utilities</Filter>
+    </ClCompile>
+    <ClCompile Include="util\cereal.cpp">
+      <Filter>Utilities</Filter>
+    </ClCompile>
+    <ClCompile Include="util\yaml.hpp">
+      <Filter>Utilities</Filter>
+    </ClCompile>
     <ClCompile Include="util\shared_cptr.cpp">
       <Filter>Utilities</Filter>
     </ClCompile>
@@ -880,6 +892,9 @@
     </ClCompile>
     <ClCompile Include="Emu\RSX\Overlays\Shaders\shader_loading_dialog.cpp">
       <Filter>Emu\GPU\RSX\Overlays\Shaders</Filter>
+    </ClCompile>
+    <ClCompile Include="Emu\Io\GHLtar.cpp">
+      <Filter>Emu\Io</Filter>
     </ClCompile>
     <ClCompile Include="Emu\Cell\lv2\sys_crypto_engine.cpp">
       <Filter>Emu\Cell\lv2</Filter>
@@ -907,6 +922,9 @@
     </ClCompile>
     <ClCompile Include="Emu\RSX\Overlays\overlay_utils.cpp">
       <Filter>Emu\GPU\RSX\Overlays</Filter>
+    </ClCompile>
+    <ClCompile Include="Emu\NP\np_handler.cpp">
+      <Filter>Emu\NP</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -1015,7 +1033,7 @@
     <ClInclude Include="..\Utilities\Timer.h">
       <Filter>Utilities</Filter>
     </ClInclude>
-    <ClInclude Include="..\Utilities\Log.h">
+    <ClInclude Include="util\logs.hpp">
       <Filter>Utilities</Filter>
     </ClInclude>
     <ClInclude Include="Emu\RSX\Null\NullGSRender.h">
@@ -1734,6 +1752,12 @@
     </ClInclude>
     <ClInclude Include="Emu\RSX\Overlays\overlay_shader_compile_notification.h">
       <Filter>Emu\GPU\RSX\Overlays</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\Io\GHLtar.h">
+      <Filter>Emu\Io</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\NP\np_handler.h">
+      <Filter>Emu\NP</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

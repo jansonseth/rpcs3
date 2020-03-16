@@ -6,6 +6,7 @@
 #include "../rsx_utils.h"
 #include "VKFormats.h"
 #include "VKCompute.h"
+#include "VKRenderPass.h"
 
 namespace vk
 {
@@ -61,6 +62,11 @@ namespace vk
 		// Always validate
 		verify("Invalid image layout!" HERE),
 			src->current_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL || src->current_layout == VK_IMAGE_LAYOUT_GENERAL;
+
+		if (vk::is_renderpass_open(cmd))
+		{
+			vk::end_renderpass(cmd);
+		}
 
 		switch (src->format())
 		{
@@ -142,6 +148,11 @@ namespace vk
 		verify("Invalid image layout!" HERE),
 			dst->current_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL || dst->current_layout == VK_IMAGE_LAYOUT_GENERAL;
 
+		if (vk::is_renderpass_open(cmd))
+		{
+			vk::end_renderpass(cmd);
+		}
+
 		switch (dst->format())
 		{
 		default:
@@ -211,6 +222,11 @@ namespace vk
 			return;
 		}
 
+		if (vk::is_renderpass_open(cmd))
+		{
+			vk::end_renderpass(cmd);
+		}
+
 		if (src != dst) [[likely]]
 		{
 			src->push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -232,7 +248,7 @@ namespace vk
 
 		const auto src_texel_size = vk::get_format_texel_width(src->info.format);
 		const auto src_length = src_texel_size * src_copy.imageExtent.width * src_copy.imageExtent.height;
-		u64 min_scratch_size = src_length;
+		u32 min_scratch_size = src_length;
 
 		// Check for DS manipulation which will affect scratch memory requirements
 		if (const VkFlags combined_aspect =  src->aspect() | dst->aspect();
@@ -331,6 +347,11 @@ namespace vk
 		auto preferred_src_format = (src == dst) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 		auto preferred_dst_format = (src == dst) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
+		if (vk::is_renderpass_open(cmd))
+		{
+			vk::end_renderpass(cmd);
+		}
+
 		if (srcLayout != preferred_src_format)
 			change_image_layout(cmd, src, srcLayout, preferred_src_format, vk::get_image_subresource_range(0, 0, 1, 1, src_aspect));
 
@@ -369,6 +390,11 @@ namespace vk
 
 		auto preferred_src_format = (src == dst) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 		auto preferred_dst_format = (src == dst) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+		if (vk::is_renderpass_open(cmd))
+		{
+			vk::end_renderpass(cmd);
+		}
 
 		//TODO: Use an array of offsets/dimensions for mipmapped blits (mipmap count > 1) since subimages will have different dimensions
 		if (srcLayout != preferred_src_format)
@@ -684,7 +710,10 @@ namespace vk
 				data_length += packed_size;
 			}
 
-			job->run(cmd, scratch_buf, section.bufferOffset, scratch_buf, src_offset, data_length,
+			const u32 buf_off32 = static_cast<u32>(section.bufferOffset);
+			const u32 src_off32 = static_cast<u32>(src_offset);
+
+			job->run(cmd, scratch_buf, buf_off32, scratch_buf, src_off32, data_length,
 				section.imageExtent.width, section.imageExtent.height, section.imageExtent.depth, packet.second);
 		}
 
@@ -709,6 +738,11 @@ namespace vk
 		std::vector<VkBufferImageCopy> copy_regions;
 		std::vector<VkBufferCopy> buffer_copies;
 		copy_regions.reserve(subresource_layout.size());
+
+		if (vk::is_renderpass_open(cmd))
+		{
+			vk::end_renderpass(cmd);
+		}
 
 		for (const rsx_subresource_layout &layout : subresource_layout)
 		{
@@ -882,8 +916,8 @@ namespace vk
 			auto src_w = src_area.width();
 			auto dst_w = dst_area.width();
 
-			if (xfer_info.src_is_typeless) src_w *= xfer_info.src_scaling_hint;
-			if (xfer_info.dst_is_typeless) dst_w *= xfer_info.dst_scaling_hint;
+			if (xfer_info.src_is_typeless) src_w = static_cast<int>(src_w * xfer_info.src_scaling_hint);
+			if (xfer_info.dst_is_typeless) dst_w = static_cast<int>(dst_w * xfer_info.dst_scaling_hint);
 
 			if (src_w == dst_w)
 			{

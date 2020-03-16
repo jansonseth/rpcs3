@@ -69,6 +69,7 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Emu\Io\GHLtar.cpp" />
     <ClCompile Include="Emu\Audio\AudioBackend.cpp" />
     <ClCompile Include="Emu\Io\KeyboardHandler.cpp" />
     <ClCompile Include="Emu\Io\pad_config.cpp" />
@@ -79,10 +80,18 @@
     <ClCompile Include="Emu\system_config_types.cpp" />
     <ClCompile Include="Emu\title.cpp" />
     <ClCompile Include="Emu\system_config.cpp" />
+    <ClCompile Include="Emu\NP\np_handler.cpp" />
     <ClCompile Include="util\atomic.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="util\atomic2.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="util\yaml.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ExceptionHandling>Sync</ExceptionHandling>
+    </ClCompile>
+    <ClCompile Include="util\cereal.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="util\shared_cptr.cpp">
@@ -101,7 +110,7 @@
     <ClCompile Include="..\Utilities\JIT.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\Utilities\Log.cpp">
+    <ClCompile Include="util\logs.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\Utilities\File.cpp">
@@ -420,10 +429,12 @@
     <ClInclude Include="Emu\Cell\Modules\cellRemotePlay.h" />
     <ClInclude Include="Emu\Cell\Modules\cellSsl.h" />
     <ClInclude Include="Emu\Cell\Modules\cellStorage.h" />
+    <ClInclude Include="Emu\Io\GHLtar.h" />
     <ClInclude Include="Emu\Io\pad_types.h" />
     <ClInclude Include="Emu\Io\Keyboard.h" />
     <ClInclude Include="Emu\Io\pad_config.h" />
     <ClInclude Include="Emu\Io\pad_config_types.h" />
+    <ClInclude Include="Emu\NP\np_handler.h" />
     <ClInclude Include="Emu\RSX\Common\texture_cache_helpers.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_fonts.h" />
     <ClInclude Include="Emu\RSX\Overlays\overlay_message_dialog.h" />
@@ -455,7 +466,7 @@
     <ClInclude Include="..\Utilities\mutex.h" />
     <ClInclude Include="..\Utilities\sema.h" />
     <ClInclude Include="..\Utilities\sync.h" />
-    <ClInclude Include="..\Utilities\Log.h" />
+    <ClInclude Include="util\logs.hpp" />
     <ClInclude Include="..\Utilities\File.h" />
     <ClInclude Include="..\Utilities\Config.h" />
     <ClInclude Include="..\Utilities\rXml.h" />

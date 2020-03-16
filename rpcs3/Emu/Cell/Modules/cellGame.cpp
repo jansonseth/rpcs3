@@ -10,6 +10,7 @@
 
 #include "Loader/PSF.h"
 #include "Utilities/StrUtil.h"
+#include "Utilities/span.h"
 #include "util/init_mutex.hpp"
 
 #include <thread>
@@ -137,15 +138,9 @@ struct content_permission final
 		bool success = false;
 		fs::g_tls_error = fs::error::ok;
 
-		try
+		if (temp.size() <= 1 || fs::remove_all(temp))
 		{
-			if (temp.size() <= 1 || fs::remove_all(temp))
-			{
-				success = true;
-			}
-		}
-		catch (...)
-		{
+			success = true;
 		}
 
 		if (!success)
@@ -298,7 +293,7 @@ error_code cellGameDataGetSizeKB(vm::ptr<u32> size)
 
 		if (fs::exists(local_dir))
 		{
-			cellGame.error("cellGameDataGetSizeKB: Unknown failure on calculating directory '%s' size (%s)", local_dir, error);
+			cellGame.error("cellGameDataGetSizeKB(): Unknown failure on calculating directory '%s' size (%s)", local_dir, error);
 		}
 
 		return CELL_GAMEDATA_ERROR_FAILURE;
@@ -483,13 +478,14 @@ error_code cellGameDataCheck(u32 type, vm::cptr<char> dirName, vm::ptr<CellGameC
 		perm->can_create = true;
 	}
 
+	perm->restrict_sfo_params = false;
+
 	if (!fs::is_dir(vfs::get(dir)))
 	{
 		cellGame.warning("cellGameDataCheck(): directory '%s' not found", dir);
 		return not_an_error(CELL_GAME_RET_NONE);
 	}
 
-	perm->restrict_sfo_params = false;
 	perm->sfo = psf::load_object(fs::file(vfs::get(dir + "/PARAM.SFO")));
 	return CELL_OK;
 }
@@ -873,7 +869,6 @@ error_code cellGameGetParamString(s32 id, vm::ptr<char> buf, u32 bufsize)
 	}
 
 	const std::string value = psf::get_string(prm->sfo, std::string(key.name));
-	const auto value_size = value.size() + 1;
 
 	if (value.empty() && !prm->sfo.count(std::string(key.name)))
 	{
@@ -881,15 +876,8 @@ error_code cellGameGetParamString(s32 id, vm::ptr<char> buf, u32 bufsize)
 		cellGame.warning("cellGameGetParamString(): id=%d was not found", id);
 	}
 
-	const auto pbuf = buf.get_ptr();
-	const bool to_pad = bufsize > value_size;
-	std::memcpy(pbuf, value.c_str(), to_pad ? value_size : bufsize);
-
-	if (to_pad)
-	{
-		std::memset(pbuf + value_size, 0, bufsize - value_size);
-	}
-
+	gsl::span dst(buf.get_ptr(), bufsize);
+	strcpy_trunc(dst, value);
 	return CELL_OK;
 }
 

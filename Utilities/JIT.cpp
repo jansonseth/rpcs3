@@ -2,7 +2,7 @@
 #include "JIT.h"
 #include "StrFmt.h"
 #include "File.h"
-#include "Log.h"
+#include "util/logs.hpp"
 #include "mutex.h"
 #include "sysinfo.h"
 #include "VirtualMemory.h"
@@ -918,12 +918,12 @@ public:
 	void notifyObjectCompiled(const llvm::Module* module, llvm::MemoryBufferRef obj) override
 	{
 		std::string name = m_path;
-		name.append(module->getName());
+		name.append(module->getName().data());
 		//fs::file(name, fs::rewrite).write(obj.getBufferStart(), obj.getBufferSize());
 		name.append(".gz");
 
 		z_stream zs{};
-		uLong zsz = compressBound(obj.getBufferSize()) + 256;
+		uLong zsz = compressBound(::narrow<u32>(obj.getBufferSize(), HERE)) + 256;
 		auto zbuf = std::make_unique<uchar[]>(zsz);
 #ifndef _MSC_VER
 #pragma GCC diagnostic push
@@ -1026,7 +1026,7 @@ public:
 	std::unique_ptr<llvm::MemoryBuffer> getObject(const llvm::Module* module) override
 	{
 		std::string path = m_path;
-		path.append(module->getName());
+		path.append(module->getName().data());
 
 		if (auto buf = load(path))
 		{
@@ -1044,7 +1044,7 @@ std::string jit_compiler::cpu(const std::string& _cpu)
 
 	if (m_cpu.empty())
 	{
-		m_cpu = llvm::sys::getHostCPUName();
+		m_cpu = llvm::sys::getHostCPUName().operator std::string();
 
 		if (m_cpu == "sandybridge" ||
 			m_cpu == "ivybridge" ||
@@ -1077,7 +1077,7 @@ std::string jit_compiler::cpu(const std::string& _cpu)
 			m_cpu == "tigerlake")
 		{
 			// Downgrade if AVX-512 is disabled or not supported
-			if (!utils::has_512())
+			if (!utils::has_avx512())
 			{
 				m_cpu = "skylake";
 			}

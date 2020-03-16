@@ -25,9 +25,10 @@
 #include <QJSEngine>
 #include <QVBoxLayout>
 #include <QTimer>
+#include <atomic>
 
 constexpr auto qstr = QString::fromStdString;
-extern bool user_asked_for_frame_capture;
+extern std::atomic<bool> user_asked_for_frame_capture;
 
 debugger_frame::debugger_frame(std::shared_ptr<gui_settings> settings, QWidget *parent)
 	: custom_dock_widget(tr("Debugger"), parent), xgui_settings(settings)
@@ -280,6 +281,8 @@ u32 debugger_frame::GetPc() const
 void debugger_frame::UpdateUI()
 {
 	UpdateUnitList();
+
+	m_btn_capture->setEnabled(Emu.IsRunning() || Emu.IsPaused());
 
 	if (m_no_thread_selected) return;
 

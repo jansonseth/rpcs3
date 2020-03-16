@@ -16,6 +16,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/IR/IntrinsicsX86.h"
 #ifdef _MSC_VER
 #pragma warning(pop)
 #else
@@ -27,7 +28,7 @@
 #include "Utilities/StrFmt.h"
 #include "Utilities/BEType.h"
 #include "Utilities/BitField.h"
-#include "Utilities/Log.h"
+#include "util/logs.hpp"
 #include "Utilities/JIT.h"
 
 #include <unordered_map>

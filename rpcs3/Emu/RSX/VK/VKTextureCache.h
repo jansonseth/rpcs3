@@ -5,6 +5,7 @@
 #include "VKCompute.h"
 #include "VKResourceManager.h"
 #include "VKDMA.h"
+#include "VKRenderPass.h"
 #include "../Common/TextureUtils.h"
 #include "Utilities/mutex.h"
 #include "../Common/texture_cache.h"
@@ -36,7 +37,7 @@ namespace vk
 		std::unique_ptr<vk::viewable_image> managed_texture = nullptr;
 
 		//DMA relevant data
-		VkEvent dma_fence = VK_NULL_HANDLE;
+		std::unique_ptr<vk::event> dma_fence;
 		vk::render_device* m_device = nullptr;
 		vk::viewable_image *vram_texture = nullptr;
 
@@ -69,13 +70,7 @@ namespace vk
 			{
 				// Even if we are managing the same vram section, we cannot guarantee contents are static
 				// The create method is only invoked when a new managed session is required
-				if (!flushed)
-				{
-					// Reset fence
-					verify(HERE), m_device, dma_fence;
-					vk::get_resource_manager()->dispose(dma_fence);
-				}
-
+				release_dma_resources();
 				synchronized = false;
 				flushed = false;
 				sync_timestamp = 0ull;
@@ -104,7 +99,7 @@ namespace vk
 
 		void destroy()
 		{
-			if (!exists())
+			if (!exists() && context != rsx::texture_upload_context::dma)
 				return;
 
 			m_tex_cache->on_section_destroyed(*this);
@@ -169,16 +164,22 @@ namespace vk
 		{
 			verify(HERE), src->samples() == 1;
 
-			if (m_device == nullptr)
+			if (!m_device)
 			{
 				m_device = &cmd.get_command_pool().get_owner();
 			}
 
-			if (dma_fence == VK_NULL_HANDLE)
+			if (dma_fence)
 			{
-				VkEventCreateInfo createInfo = {};
-				createInfo.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO;
-				vkCreateEvent(*m_device, &createInfo, nullptr, &dma_fence);
+				// NOTE: This can be reached if previously synchronized, or a special path happens.
+				// If a hard flush occurred while this surface was flush_always the cache would have reset its protection afterwards.
+				// DMA resource would still be present but already used to flush previously.
+				vk::get_resource_manager()->dispose(dma_fence);
+			}
+
+			if (vk::is_renderpass_open(cmd))
+			{
+				vk::end_renderpass(cmd);
 			}
 
 			src->push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -284,23 +285,12 @@ namespace vk
 
 			src->pop_layout(cmd);
 
-			if (synchronized) [[unlikely]]
-			{
-				// Replace the wait event with a new one to avoid premature signaling!
-				vk::get_resource_manager()->dispose(dma_fence);
+			// Create event object for this transfer and queue signal op
+			dma_fence = std::make_unique<vk::event>(*m_device);
+			dma_fence->signal(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-				VkEventCreateInfo createInfo = {};
-				createInfo.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO;
-				vkCreateEvent(*m_device, &createInfo, nullptr, &dma_fence);
-			}
-			else
-			{
-				// If this is speculated, it should only occur once
-				verify(HERE), vkGetEventStatus(*m_device, dma_fence) == VK_EVENT_RESET;
-			}
-
+			// Set cb flag for queued dma operations
 			cmd.set_flag(vk::command_buffer::cb_has_dma_transfer);
-			vkCmdSetEvent(cmd, dma_fence, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
 
 			synchronized = true;
 			sync_timestamp = get_system_time();
@@ -396,8 +386,7 @@ namespace vk
 			AUDIT(synchronized);
 
 			// Synchronize, reset dma_fence after waiting
-			vk::wait_for_event(dma_fence, GENERAL_WAIT_TIMEOUT);
-			vkResetEvent(*m_device, dma_fence);
+			vk::wait_for_event(dma_fence.get(), GENERAL_WAIT_TIMEOUT);
 
 			const auto range = get_confirmed_range();
 			vk::flush_dma(range.start, range.length());
@@ -502,8 +491,7 @@ namespace vk
 		{
 			if (tex.is_managed())
 			{
-				m_temporary_memory_size += tex.get_section_size();
-				m_temporary_storage.emplace_back(tex);
+				vk::get_resource_manager()->dispose(tex.get_texture());
 			}
 		}
 
@@ -1484,7 +1472,7 @@ namespace vk
 			baseclass::on_frame_end();
 		}
 
-		vk::image *upload_image_simple(vk::command_buffer& cmd, u32 address, u32 width, u32 height)
+		vk::image *upload_image_simple(vk::command_buffer& cmd, u32 address, u32 width, u32 height, u32 pitch)
 		{
 			if (!m_formats_support.bgra8_linear)
 			{
@@ -1497,7 +1485,7 @@ namespace vk
 				VK_IMAGE_TYPE_2D,
 				VK_FORMAT_B8G8R8A8_UNORM,
 				width, height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_PREINITIALIZED,
-				VK_IMAGE_TILING_LINEAR, VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0);
+				VK_IMAGE_TILING_LINEAR, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 0);
 
 			VkImageSubresource subresource{};
 			subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -1507,7 +1495,6 @@ namespace vk
 
 			void* mem = image->memory->map(0, layout.rowPitch * height);
 
-			u32 row_pitch = width * 4;
 			auto src = vm::_ptr<const char>(address);
 			auto dst = static_cast<char*>(mem);
 
@@ -1520,7 +1507,7 @@ namespace vk
 				for (u32 col = 0; col < width; ++col)
 					casted_dst[col] = casted_src[col];
 
-				src += row_pitch;
+				src += pitch;
 				dst += layout.rowPitch;
 			}
 

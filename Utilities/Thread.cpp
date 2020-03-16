@@ -41,7 +41,7 @@
 #endif
 
 #include "sync.h"
-#include "Log.h"
+#include "util/logs.hpp"
 
 LOG_CHANNEL(sig_log);
 LOG_CHANNEL(sys_log, "SYS");
@@ -60,21 +60,45 @@ void fmt_class_string<std::thread::id>::format(std::string& out, u64 arg)
 	out += ss.str();
 }
 
-[[noreturn]] void catch_all_exceptions()
+#ifndef _WIN32
+bool IsDebuggerPresent()
 {
-	try
+	char buf[4096];
+	fs::file status_fd("/proc/self/status");
+	if (!status_fd)
 	{
-		throw;
+		std::fprintf(stderr, "Failed to open /proc/self/status\n");
+		return false;
 	}
-	catch (const std::exception& e)
+
+	const auto num_read = status_fd.read(buf, sizeof(buf) - 1);
+	if (num_read == 0 || num_read == umax)
 	{
-		report_fatal_error("{" + g_tls_log_prefix() + "} Unhandled exception of type '"s + typeid(e).name() + "': "s + e.what());
+		std::fprintf(stderr, "Failed to read /proc/self/status (%d)\n", errno);
+		return false;
 	}
-	catch (...)
+
+	buf[num_read] = '\0';
+	std::string_view status = buf;
+
+	const auto found = status.find("TracerPid:");
+	if (found == umax)
 	{
-		report_fatal_error("{" + g_tls_log_prefix() + "} Unhandled exception (unknown)");
+		std::fprintf(stderr, "Failed to find 'TracerPid:' in /proc/self/status\n");
+		return false;
 	}
+
+	for (const char* cp = status.data() + found + 10; cp <= status.data() + num_read; ++cp)
+	{
+		if (!std::isspace(*cp))
+		{
+			return std::isdigit(*cp) != 0 && *cp != '0';
+		}
+	}
+
+	return false;
 }
+#endif
 
 enum x64_reg_t : u32
 {
@@ -1111,33 +1135,12 @@ bool handle_access_violation(u32 addr, bool is_writing, x64_context* context) no
 
 	if (rsx::g_access_violation_handler)
 	{
-		bool handled = false;
-
-		try
+		if (cpu)
 		{
-			if (cpu)
-			{
-				vm::temporary_unlock(*cpu);
-			}
-
-			handled = rsx::g_access_violation_handler(addr, is_writing);
+			vm::temporary_unlock(*cpu);
 		}
-		catch (const std::exception& e)
-		{
-			rsx_log.fatal("g_access_violation_handler(0x%x, %d): %s", addr, is_writing, e.what());
 
-			if (cpu)
-			{
-				cpu->state += cpu_flag::dbg_pause;
-
-				if (cpu->test_stopped())
-				{
-					std::terminate();
-				}
-			}
-
-			return false;
-		}
+		bool handled = rsx::g_access_violation_handler(addr, is_writing);
 
 		if (handled)
 		{
@@ -1449,7 +1452,7 @@ bool handle_access_violation(u32 addr, bool is_writing, x64_context* context) no
 			if (!access_violation_recovered)
 			{
 				vm_log.notice("\n%s", cpu->dump());
-				vm_log.fatal("Access violation %s location 0x%x (%s)", is_writing ? "writing" : "reading", addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
+				vm_log.error("Access violation %s location 0x%x (%s)", is_writing ? "writing" : "reading", addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
 			}
 
 			// TODO:
@@ -1506,6 +1509,11 @@ bool handle_access_violation(u32 addr, bool is_writing, x64_context* context) no
 
 static LONG exception_handler(PEXCEPTION_POINTERS pExp) noexcept
 {
+	if (pExp->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT && IsDebuggerPresent())
+	{
+		return EXCEPTION_CONTINUE_SEARCH;
+	}
+
 	const u64 addr64 = pExp->ExceptionRecord->ExceptionInformation[1] - reinterpret_cast<u64>(vm::g_base_addr);
 	const u64 exec64 = (pExp->ExceptionRecord->ExceptionInformation[1] - reinterpret_cast<u64>(vm::g_exec_addr)) / 2;
 	const bool is_writing = pExp->ExceptionRecord->ExceptionInformation[0] != 0;
@@ -1525,6 +1533,7 @@ static LONG exception_handler(PEXCEPTION_POINTERS pExp) noexcept
 			return EXCEPTION_CONTINUE_EXECUTION;
 		}
 	}
+
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -1617,9 +1626,13 @@ static LONG exception_filter(PEXCEPTION_POINTERS pExp) noexcept
 
 	// TODO: print registers and the callstack
 
-	// Report fatal error
 	sys_log.fatal("\n%s", msg);
-	report_fatal_error(msg);
+
+	if (!IsDebuggerPresent())
+	{
+		report_fatal_error(msg);
+	}
+
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -1682,7 +1695,7 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 		sys_log.notice("\n%s", cpu->dump());
 	}
 
-	std::string msg = fmt::format("Segfault %s location %p at %p.", cause, info->si_addr, RIP(context));
+	std::string msg = fmt::format("Segfault %s location %p at %p.\n", cause, info->si_addr, RIP(context));
 
 	if (thread_ctrl::get_current())
 	{
@@ -1693,8 +1706,14 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 
 	fmt::append(msg, "Thread id = %s.\n", std::this_thread::get_id());
 
-	// TODO (debugger interaction)
 	sys_log.fatal("\n%s", msg);
+	std::fprintf(stderr, "%s\n", msg.c_str());
+
+	if (IsDebuggerPresent())
+	{
+		__asm("int3;");
+	}
+
 	report_fatal_error(msg);
 }
 
@@ -1707,14 +1726,32 @@ const bool s_exception_handler_set = []() -> bool
 
 	if (::sigaction(SIGSEGV, &sa, NULL) == -1)
 	{
-		std::printf("sigaction(SIGSEGV) failed (0x%x).", errno);
+		std::fprintf(stderr, "sigaction(SIGSEGV) failed (%d).\n", errno);
 		std::abort();
 	}
 
+	std::printf("Debugger: %d\n", +IsDebuggerPresent());
 	return true;
 }();
 
 #endif
+
+const bool s_terminate_handler_set = []() -> bool
+{
+	std::set_terminate([]()
+	{
+		if (IsDebuggerPresent())
+#ifdef _MSC_VER
+			__debugbreak();
+#else
+			__asm("int3;");
+#endif
+
+		report_fatal_error("RPCS3 has abnormally terminated.");
+	});
+
+	return true;
+}();
 
 thread_local DECLARE(thread_ctrl::g_tls_this_thread) = nullptr;
 
@@ -1722,8 +1759,6 @@ DECLARE(thread_ctrl::g_native_core_layout) { native_core_arrangement::undefined 
 
 void thread_base::start(native_entry entry)
 {
-	thread_ctrl::g_thread_count++;
-
 #ifdef _WIN32
 	m_thread = ::_beginthreadex(nullptr, 0, entry, this, CREATE_SUSPENDED, nullptr);
 	verify("thread_ctrl::start" HERE), m_thread, ::ResumeThread(reinterpret_cast<HANDLE>(+m_thread)) != -1;
@@ -1742,8 +1777,10 @@ void thread_base::initialize(bool(*wait_cb)(const void*))
 
 	g_tls_log_prefix = []
 	{
-		return thread_ctrl::g_tls_this_thread->m_name.get();
+		return thread_ctrl::get_name_cached();
 	};
+
+	std::string name = thread_ctrl::get_name_cached();
 
 #ifdef _MSC_VER
 	struct THREADNAME_INFO
@@ -1755,11 +1792,11 @@ void thread_base::initialize(bool(*wait_cb)(const void*))
 	};
 
 	// Set thread name for VS debugger
-	if (IsDebuggerPresent())
+	if (IsDebuggerPresent()) [&]() NEVER_INLINE
 	{
 		THREADNAME_INFO info;
 		info.dwType = 0x1000;
-		info.szName = m_name.get().c_str();
+		info.szName = name.c_str();
 		info.dwThreadID = -1;
 		info.dwFlags = 0;
 
@@ -1770,33 +1807,24 @@ void thread_base::initialize(bool(*wait_cb)(const void*))
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
 		}
-	}
+	}();
 #endif
 
 #if defined(__APPLE__)
-	pthread_setname_np(m_name.get().substr(0, 15).c_str());
+	name.resize(std::min<std::size_t>(15, name.size()));
+	pthread_setname_np(name.c_str());
 #elif defined(__DragonFly__) || defined(__FreeBSD__) || defined(__OpenBSD__)
-	pthread_set_name_np(pthread_self(), m_name.get().c_str());
+	pthread_set_name_np(pthread_self(), name.c_str());
 #elif defined(__NetBSD__)
-	pthread_setname_np(pthread_self(), "%s", const_cast<char*>(m_name.get().c_str()));
+	pthread_setname_np(pthread_self(), "%s", name.data());
 #elif !defined(_WIN32)
-	pthread_setname_np(pthread_self(), m_name.get().substr(0, 15).c_str());
-#endif
-
-#ifdef __linux__
-	m_timer = timerfd_create(CLOCK_MONOTONIC, 0);
-	if (m_timer == -1)
-	{
-		sig_log.error("Linux timer allocation failed, use wait_unlock() only");
-	}
+	name.resize(std::min<std::size_t>(15, name.size()));
+	pthread_setname_np(pthread_self(), name.c_str());
 #endif
 }
 
 void thread_base::notify_abort() noexcept
 {
-	// For now
-	notify();
-
 	atomic_storage_futex::raw_notify(+m_state_notifier);
 }
 
@@ -1804,13 +1832,6 @@ bool thread_base::finalize(int) noexcept
 {
 	// Report pending errors
 	error_code::error_report(0, 0, 0, 0);
-
-#ifdef __linux__
-	if (m_timer != -1)
-	{
-		close(m_timer);
-	}
-#endif
 
 #ifdef _WIN32
 	ULONG64 cycles{};
@@ -1842,7 +1863,7 @@ bool thread_base::finalize(int) noexcept
 
 	g_tls_log_prefix = []
 	{
-		return thread_ctrl::g_tls_this_thread->m_name.get();
+		return thread_ctrl::get_name_cached();
 	};
 
 	sig_log.notice("Thread time: %fs (%fGc); Faults: %u [rsx:%u, spu:%u]; [soft:%u hard:%u]; Switches:[vol:%u unvol:%u]",
@@ -1854,18 +1875,20 @@ bool thread_base::finalize(int) noexcept
 		fsoft, fhard, ctxvol, ctxinv);
 
 	// Return true if need to delete thread object
-	const bool result = m_state.exchange(thread_state::finished) == thread_state::detached;
+	const bool ok = m_state.exchange(thread_state::finished) <= thread_state::aborting;
 
 	// Signal waiting threads
 	m_state.notify_all();
-	return result;
+
+	// No detached thread supported atm
+	return !ok;
 }
 
 void thread_base::finalize() noexcept
 {
+	atomic_storage_futex::set_wait_callback([](const void*){ return true; });
 	g_tls_log_prefix = []() -> std::string { return {}; };
 	thread_ctrl::g_tls_this_thread = nullptr;
-	thread_ctrl::g_thread_count--;
 }
 
 void thread_ctrl::_wait_for(u64 usec, bool alert /* true */)
@@ -1873,7 +1896,34 @@ void thread_ctrl::_wait_for(u64 usec, bool alert /* true */)
 	auto _this = g_tls_this_thread;
 
 #ifdef __linux__
-	if (!alert && _this->m_timer != -1 && usec > 0 && usec <= 1000)
+	static thread_local struct linux_timer_handle_t
+	{
+		// Allocate timer only if needed (i.e. someone calls _wait_for with alert and short period)
+		const int m_timer = timerfd_create(CLOCK_MONOTONIC, 0);
+
+		linux_timer_handle_t() noexcept
+		{
+			if (m_timer == -1)
+			{
+				sig_log.error("Linux timer allocation failed, using the fallback instead.");
+			}
+		}
+
+		operator int() const
+		{
+			return m_timer;
+		}
+
+		~linux_timer_handle_t()
+		{
+			if (m_timer != -1)
+			{
+				close(m_timer);
+			}
+		}
+	} fd_timer;
+
+	if (!alert && usec > 0 && usec <= 1000 && fd_timer != -1)
 	{
 		struct itimerspec timeout;
 		u64 missed;
@@ -1883,59 +1933,42 @@ void thread_ctrl::_wait_for(u64 usec, bool alert /* true */)
 		timeout.it_value.tv_sec = nsec / 1000000000ull;
 		timeout.it_interval.tv_sec = 0;
 		timeout.it_interval.tv_nsec = 0;
-		timerfd_settime(_this->m_timer, 0, &timeout, NULL);
-		if (read(_this->m_timer, &missed, sizeof(missed)) != sizeof(missed))
+		timerfd_settime(fd_timer, 0, &timeout, NULL);
+		if (read(fd_timer, &missed, sizeof(missed)) != sizeof(missed))
 			sig_log.error("timerfd: read() failed");
 		return;
 	}
 #endif
 
-	std::unique_lock lock(_this->m_mutex, std::defer_lock);
-
-	while (true)
+	if (_this->m_signal && _this->m_signal.exchange(0))
 	{
-		// Mutex is unlocked at the start and after the waiting
-		if (u32 sig = _this->m_signal.load())
-		{
-			if (sig & 1)
-			{
-				_this->m_signal &= ~1;
-				return;
-			}
-		}
-
-		if (usec == 0)
-		{
-			// No timeout: return immediately
-			return;
-		}
-
-		if (!lock)
-		{
-			lock.lock();
-		}
-
-		// Double-check the value
-		if (u32 sig = _this->m_signal.load())
-		{
-			if (sig & 1)
-			{
-				_this->m_signal &= ~1;
-				return;
-			}
-		}
-
-		_this->m_cond.wait_unlock(usec, lock);
-
-		if (usec < cond_variable::max_timeout)
-		{
-			usec = 0;
-		}
+		return;
 	}
+
+	_this->m_signal.wait(0, atomic_wait_timeout{usec <= 0xffff'ffff'ffff'ffff / 1000 ? usec * 1000 : 0xffff'ffff'ffff'ffff});
+}
+
+std::string thread_ctrl::get_name_cached()
+{
+	auto _this = thread_ctrl::g_tls_this_thread;
+
+	if (!_this)
+	{
+		return {};
+	}
+
+	static thread_local stx::shared_cptr<std::string> name_cache;
+
+	if (!_this->m_tname.is_equal(name_cache)) [[unlikely]]
+	{
+		name_cache = _this->m_tname.load();
+	}
+
+	return *name_cache;
 }
 
 thread_base::thread_base(std::string_view name)
-	: m_name(name)
+	: m_tname(stx::shared_cptr<std::string>::make(name))
 {
 }
 
@@ -1962,11 +1995,11 @@ void thread_base::join() const
 
 void thread_base::notify()
 {
-	if (!(m_signal & 1))
+	// Increment with saturation
+	if (m_signal.try_inc())
 	{
-		m_signal |= 1;
-		m_mutex.lock_unlock();
-		m_cond.notify_one();
+		// Considered impossible to have a situation when not notified
+		m_signal.notify_all();
 	}
 }
 
@@ -2007,17 +2040,56 @@ u64 thread_base::get_cycles()
 	}
 }
 
+void thread_ctrl::emergency_exit(std::string_view reason)
+{
+	sig_log.fatal("Thread terminated due to fatal error: %s", reason);
+
+	std::fprintf(stderr, "Thread '%s' terminated due to fatal error: %s\n", g_tls_log_prefix().c_str(), std::string(reason).c_str());
+
+#ifdef _WIN32
+	if (IsDebuggerPresent())
+	{
+		OutputDebugStringA(fmt::format("Thread '%s' terminated due to fatal error: %s\n", g_tls_log_prefix(), reason).c_str());
+		__debugbreak();
+	}
+#else
+	if (IsDebuggerPresent())
+	{
+		__asm("int3;");
+	}
+#endif
+
+	if (const auto _this = g_tls_this_thread)
+	{
+		if (_this->finalize(0))
+		{
+			delete _this;
+		}
+
+		thread_base::finalize();
+
+#ifdef _WIN32
+		_endthreadex(0);
+#else
+		pthread_exit(0);
+#endif
+	}
+
+	// Assume main thread
+	report_fatal_error(std::string(reason));
+}
+
 void thread_ctrl::detect_cpu_layout()
 {
 	if (!g_native_core_layout.compare_and_swap_test(native_core_arrangement::undefined, native_core_arrangement::generic))
 		return;
 
 	const auto system_id = utils::get_system_info();
-	if (system_id.find("Ryzen") != std::string::npos)
+	if (system_id.find("Ryzen") != umax)
 	{
 		g_native_core_layout.store(native_core_arrangement::amd_ccx);
 	}
-	else if (system_id.find("Intel") != std::string::npos)
+	else if (system_id.find("Intel") != umax)
 	{
 #ifdef _WIN32
 		const LOGICAL_PROCESSOR_RELATIONSHIP relationship = LOGICAL_PROCESSOR_RELATIONSHIP::RelationProcessorCore;
@@ -2087,7 +2159,7 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 			const auto system_id = utils::get_system_info();
 			if (thread_count >= 32)
 			{
-				if (system_id.find("3950X") != std::string::npos)
+				if (system_id.find("3950X") != umax)
 				{
 					// zen2
 					// Ryzen 9 3950X
@@ -2096,7 +2168,7 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 					spu_mask = 0b00000000111111110000000000000000;
 					rsx_mask = 0b00000000000000001111111100000000;
 				}
-				else if (system_id.find("2970WX") != std::string::npos)
+				else if (system_id.find("2970WX") != umax)
 				{
 					// zen+
 					// Threadripper 2970WX
@@ -2118,7 +2190,7 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 			}
 			else if (thread_count == 24)
 			{
-				if (system_id.find("3900X") != std::string::npos)
+				if (system_id.find("3900X") != umax)
 				{
 					// zen2
 					// Ryzen 9 3900X
@@ -2139,7 +2211,7 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 			}
 			else if (thread_count == 16)
 			{
-				if (system_id.find("3700X") != std::string::npos || system_id.find("3800X") != std::string::npos)
+				if (system_id.find("3700X") != umax || system_id.find("3800X") != umax)
 				{
 					// Ryzen 7 3700/3800 (x)
 					// Assign threads 1-16
@@ -2159,7 +2231,7 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 			}
 			else if (thread_count == 12)
 			{
-				if (system_id.find("3600") != std::string::npos)
+				if (system_id.find("3600") != umax)
 				{
 					// zen2
 					// R5 3600 (x)

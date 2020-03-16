@@ -22,6 +22,10 @@
 #include "Utilities/dynamic_library.h"
 DYNAMIC_IMPORT("ntdll.dll", NtQueryTimerResolution, NTSTATUS(PULONG MinimumResolution, PULONG MaximumResolution, PULONG CurrentResolution));
 DYNAMIC_IMPORT("ntdll.dll", NtSetTimerResolution, NTSTATUS(ULONG DesiredResolution, BOOLEAN SetResolution, PULONG CurrentResolution));
+#else
+#include <unistd.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #endif
 
 #ifdef __linux__
@@ -33,8 +37,12 @@ DYNAMIC_IMPORT("ntdll.dll", NtSetTimerResolution, NTSTATUS(ULONG DesiredResoluti
 #include <dispatch/dispatch.h>
 #endif
 
+#include "Utilities/sysinfo.h"
+#include "Utilities/Config.h"
 #include "rpcs3_version.h"
 #include "Emu/System.h"
+#include <thread>
+#include <charconv>
 
 inline std::string sstr(const QString& _in) { return _in.toStdString(); }
 
@@ -44,26 +52,31 @@ inline auto tr(Args&&... args)
 	return QObject::tr(std::forward<Args>(args)...);
 }
 
-namespace logs
-{
-	void set_init();
-}
+static semaphore<> s_qt_init;
 
-static semaphore<> s_init{0};
-static semaphore<> s_qt_init{0};
-static semaphore<> s_qt_mutex{};
+static atomic_t<char*> s_argv0;
+
+#ifndef _WIN32
+extern char **environ;
+#endif
 
 [[noreturn]] extern void report_fatal_error(const std::string& text)
 {
-	s_qt_mutex.lock();
+	const bool local = s_qt_init.try_lock();
 
-	if (!s_qt_init.try_lock())
+	// Possibly created and assigned here
+	QScopedPointer<QCoreApplication> app;
+
+	if (local)
 	{
-		s_init.lock();
 		static int argc = 1;
-		static char arg1[] = {"ERROR"};
-		static char* argv[] = {arg1};
-		static QApplication app0{argc, argv};
+		static char* argv[] = {+s_argv0};
+		app.reset(new QApplication{argc, argv});
+	}
+
+	if (!local)
+	{
+		fprintf(stderr, "RPCS3: %s\n", text.c_str());
 	}
 
 	auto show_report = [](const std::string& text)
@@ -96,11 +109,58 @@ static semaphore<> s_qt_mutex{};
 	else
 #endif
 	{
-		show_report(text);
+		// If Qt is already initialized, spawn a new RPCS3 process with an --error argument
+		if (local)
+		{
+			// Since we only show an error, we can hope for a graceful exit
+			show_report(text);
+			app.reset();
+			std::exit(0);
+		}
+		else
+		{
+#ifdef _WIN32
+			wchar_t buffer[32767];
+			GetModuleFileNameW(nullptr, buffer, sizeof(buffer) / 2);
+			std::wstring arg(text.cbegin(), text.cend()); // ignore unicode for now
+			_wspawnl(_P_WAIT, buffer, buffer, L"--error", arg.c_str(), nullptr);
+#else
+			pid_t pid;
+			std::vector<char> data(text.data(), text.data() + text.size() + 1);
+			std::string err_arg = "--error";
+			char* argv[] = {+s_argv0, err_arg.data(), data.data(), nullptr};
+			int ret = posix_spawn(&pid, +s_argv0, nullptr, nullptr, argv, environ);
+
+			if (ret == 0)
+			{
+				int status;
+				waitpid(pid, &status, 0);
+			}
+			else
+			{
+				fprintf(stderr, "posix_spawn() failed: %d\n", ret);
+			}
+#endif
+			std::abort();
+		}
 	}
 
 	std::abort();
 }
+
+struct pause_on_fatal final : logs::listener
+{
+	~pause_on_fatal() override = default;
+
+	void log(u64 /*stamp*/, const logs::message& msg, const std::string& /*prefix*/, const std::string& /*text*/) override
+	{
+		if (msg.sev == logs::level::fatal)
+		{
+			// Pause emulation if fatal error encountered
+			Emu.Pause();
+		}
+	}
+};
 
 const char* arg_headless   = "headless";
 const char* arg_no_gui     = "no-gui";
@@ -109,6 +169,7 @@ const char* arg_rounding   = "dpi-rounding";
 const char* arg_styles     = "styles";
 const char* arg_style      = "style";
 const char* arg_stylesheet = "stylesheet";
+const char* arg_error      = "error";
 
 int find_arg(std::string arg, int& argc, char* argv[])
 {
@@ -154,48 +215,43 @@ QCoreApplication* createApplication(int& argc, char* argv[])
 		auto rounding_val = Qt::HighDpiScaleFactorRoundingPolicy::PassThrough;
 		auto rounding_str = std::to_string(static_cast<int>(rounding_val));
 		const auto i_rounding = find_arg(arg_rounding, argc, argv);
+
 		if (i_rounding)
 		{
 			const auto i_rounding_2 = (argc > (i_rounding + 1)) ? (i_rounding + 1) : 0;
+
 			if (i_rounding_2)
 			{
 				const auto arg_val = argv[i_rounding_2];
-				try
-				{
-					const auto rounding_val_cli = std::stoi(arg_val);
-					if (rounding_val_cli >= static_cast<int>(Qt::HighDpiScaleFactorRoundingPolicy::Unset) && rounding_val_cli <= static_cast<int>(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough))
-					{
-						rounding_val = static_cast<Qt::HighDpiScaleFactorRoundingPolicy>(rounding_val_cli);
-						rounding_str = std::to_string(static_cast<int>(rounding_val));
-					}
-					else
-					{
-						throw std::exception();
-					}
-				}
-				catch (const std::exception&)
+				const auto arg_len = std::strlen(arg_val);
+				s64 rounding_val_cli = 0;
+
+				if (!cfg::try_to_int64(&rounding_val_cli, arg_val, static_cast<int>(Qt::HighDpiScaleFactorRoundingPolicy::Unset), static_cast<int>(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough)))
 				{
 					std::cout << "The value " << arg_val << " for " << arg_rounding << " is not allowed. Please use a valid value for Qt::HighDpiScaleFactorRoundingPolicy.\n";
 				}
+				else
+				{
+					rounding_val = static_cast<Qt::HighDpiScaleFactorRoundingPolicy>(static_cast<int>(rounding_val_cli));
+					rounding_str = std::to_string(static_cast<int>(rounding_val));
+				}
 			}
 		}
-		try
+
 		{
 			rounding_str = qEnvironmentVariable("QT_SCALE_FACTOR_ROUNDING_POLICY", rounding_str.c_str()).toStdString();
-			const auto rounding_val_final = std::stoi(rounding_str);
-			if (rounding_val_final >= static_cast<int>(Qt::HighDpiScaleFactorRoundingPolicy::Unset) && rounding_val_final <= static_cast<int>(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough))
+
+			s64 rounding_val_final = 0;
+
+			if (cfg::try_to_int64(&rounding_val_final, rounding_str, static_cast<int>(Qt::HighDpiScaleFactorRoundingPolicy::Unset), static_cast<int>(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough)))
 			{
-				rounding_val = static_cast<Qt::HighDpiScaleFactorRoundingPolicy>(rounding_val_final);
+				rounding_val = static_cast<Qt::HighDpiScaleFactorRoundingPolicy>(static_cast<int>(rounding_val_final));
 				rounding_str = std::to_string(static_cast<int>(rounding_val));
 			}
 			else
 			{
-				throw std::exception();
+				std::cout << "The value " << rounding_str << " for " << arg_rounding << " is not allowed. Please use a valid value for Qt::HighDpiScaleFactorRoundingPolicy.\n";
 			}
-		}
-		catch (const std::exception&)
-		{
-			std::cout << "The value " << rounding_str << " for " << arg_rounding << " is not allowed. Please use a valid value for Qt::HighDpiScaleFactorRoundingPolicy.\n";
 		}
 		QApplication::setHighDpiScaleFactorRoundingPolicy(rounding_val);
 	}
@@ -203,9 +259,100 @@ QCoreApplication* createApplication(int& argc, char* argv[])
 	return new gui_application(argc, argv);
 }
 
+
+
 int main(int argc, char** argv)
 {
-	logs::set_init();
+	s_argv0 = argv[0]; // Save for report_fatal_error
+
+	// Only run RPCS3 to display an error
+	if (int err_pos = find_arg(arg_error, argc, argv))
+	{
+		// Reconstruction of the error from multiple args
+		std::string error;
+		for (int i = err_pos + 1; i < argc; i++)
+		{
+			if (i > err_pos + 1)
+				error += ' ';
+			error += argv[i];
+		}
+
+		report_fatal_error(error);
+	}
+
+	const std::string lock_name = fs::get_cache_dir() + "RPCS3.buf";
+
+	fs::file instance_lock;
+
+	for (u32 num = 0; num < 100 && !instance_lock.open(lock_name, fs::rewrite + fs::lock); num++)
+	{
+		std::this_thread::sleep_for(30ms);
+	}
+
+	if (!instance_lock)
+	{
+		if (fs::g_tls_error == fs::error::acces)
+		{
+			if (fs::exists(lock_name))
+			{
+				report_fatal_error("Another instance of RPCS3 is running. Close it or kill its process, if necessary.");
+			}
+			else
+			{
+				report_fatal_error("Cannot create RPCS3.log (access denied)."
+#ifdef _WIN32
+				"\nNote that RPCS3 cannot be installed in Program Files or similar directory with limited permissions."
+#else
+				"\nPlease, check RPCS3 permissions in '~/.config/rpcs3'."
+#endif
+				);
+			}
+		}
+		else
+		{
+			report_fatal_error(fmt::format("Cannot create RPCS3.log (error %s)", fs::g_tls_error));
+		}
+
+		return 1;
+	}
+
+	std::unique_ptr<logs::listener> log_file;
+	{
+		// Check free space
+		fs::device_stat stats{};
+		if (!fs::statfs(fs::get_cache_dir(), stats) || stats.avail_free < 128 * 1024 * 1024)
+		{
+			report_fatal_error(fmt::format("Not enough free space (%f KB)", stats.avail_free / 1000000.));
+			return 1;
+		}
+
+		// Limit log size to ~25% of free space
+		log_file = logs::make_file_listener(fs::get_cache_dir() + "RPCS3.log", stats.avail_free / 4);
+	}
+
+	std::unique_ptr<logs::listener> log_pauser = std::make_unique<pause_on_fatal>();
+	logs::listener::add(log_pauser.get());
+
+	{
+		const std::string firmware_version = utils::get_firmware_version();
+		const std::string firmware_string  = firmware_version.empty() ? "" : (" | Firmware version: " + firmware_version);
+
+		// Write initial message
+		logs::stored_message ver;
+		ver.m.ch  = nullptr;
+		ver.m.sev = logs::level::always;
+		ver.stamp = 0;
+		ver.text  = fmt::format("RPCS3 v%s | %s%s\n%s", rpcs3::get_version().to_string(), rpcs3::get_branch(), firmware_string, utils::get_system_info());
+
+		// Write OS version
+		logs::stored_message os;
+		os.m.ch  = nullptr;
+		os.m.sev = logs::level::notice;
+		os.stamp = 0;
+		os.text = utils::get_OS_version();
+
+		logs::set_init({std::move(ver), std::move(os)});
+	}
 
 #ifdef __linux__
 	struct ::rlimit rlim;
@@ -217,8 +364,7 @@ int main(int argc, char** argv)
 	setenv( "KDE_DEBUG", "1", 0 );
 #endif
 
-	s_init.unlock();
-	s_qt_mutex.lock();
+	std::lock_guard qt_init(s_qt_init);
 
 	// The constructor of QApplication eats the --style and --stylesheet arguments.
 	// By checking for stylesheet().isEmpty() we could implicitly know if a stylesheet was passed,
@@ -313,9 +459,6 @@ int main(int argc, char** argv)
 			Emu.BootGame(path, "", true);
 		});
 	}
-
-	s_qt_init.unlock();
-	s_qt_mutex.unlock();
 
 	// run event loop (maybe only needed for the gui application)
 	return app->exec();

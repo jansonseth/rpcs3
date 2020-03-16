@@ -166,7 +166,7 @@ void GLVertexDecompilerThread::insertMainStart(std::stringstream & OS)
 	{
 		for (const ParamItem &PI : PT.items)
 		{
-			if (PI.name.substr(0, 7) == "dst_reg")
+			if (PI.name.starts_with("dst_reg"))
 				continue;
 
 			OS << "	" << PT.type << " " << PI.name;
@@ -315,14 +315,7 @@ void GLVertexProgram::Delete()
 
 	if (id)
 	{
-		if (Emu.IsStopped())
-		{
-			rsx_log.warning("GLVertexProgram::Delete(): glDeleteShader(%d) avoided", id);
-		}
-		else
-		{
-			glDeleteShader(id);
-		}
+		glDeleteShader(id);
 		id = 0;
 	}
 }

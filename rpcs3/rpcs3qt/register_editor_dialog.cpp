@@ -123,7 +123,7 @@ void register_editor_dialog::updateRegister(const QString& text)
 		auto& spu = *static_cast<spu_thread*>(cpu.get());
 
 		std::string::size_type first_brk = reg.find('[');
-		if (first_brk != std::string::npos)
+		if (first_brk != umax)
 		{
 			long reg_index;
 			reg_index = atol(reg.substr(first_brk + 1, reg.length() - 2).c_str());
@@ -147,7 +147,7 @@ void register_editor_dialog::OnOkay(const std::shared_ptr<cpu_thread>& _cpu)
 
 		while (value.length() < 32) value = "0" + value;
 		const auto first_brk = reg.find('[');
-		try
+		// TODO: handle invalid conversions
 		{
 			if (first_brk != umax)
 			{
@@ -182,9 +182,6 @@ void register_editor_dialog::OnOkay(const std::shared_ptr<cpu_thread>& _cpu)
 				return;
 			}
 		}
-		catch (std::invalid_argument&) //if any of the stoull conversion fail
-		{
-		}
 	}
 	else
 	{
@@ -192,7 +189,7 @@ void register_editor_dialog::OnOkay(const std::shared_ptr<cpu_thread>& _cpu)
 
 		while (value.length() < 32) value = "0" + value;
 		const auto first_brk = reg.find('[');
-		try
+		// TODO: handle invalid conversions
 		{
 			if (first_brk != umax)
 			{
@@ -206,9 +203,6 @@ void register_editor_dialog::OnOkay(const std::shared_ptr<cpu_thread>& _cpu)
 					return;
 				}
 			}
-		}
-		catch (std::invalid_argument&)
-		{
 		}
 	}
 	QMessageBox::critical(this, tr("Error"), tr("This value could not be converted.\nNo changes were made."));

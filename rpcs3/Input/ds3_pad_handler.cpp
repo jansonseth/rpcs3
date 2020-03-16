@@ -153,7 +153,7 @@ std::vector<std::string> ds3_pad_handler::ListDevices()
 	return ds3_pads_list;
 }
 
-void ds3_pad_handler::SetPadData(const std::string& padId, u32 largeMotor, u32 smallMotor, s32/* r*/, s32/* g*/, s32 /* b*/)
+void ds3_pad_handler::SetPadData(const std::string& padId, u32 largeMotor, u32 smallMotor, s32/* r*/, s32/* g*/, s32 /* b*/, bool /*battery_led*/, u32 /*battery_led_brightness*/)
 {
 	std::shared_ptr<ds3_device> device = get_ds3_device(padId);
 	if (device == nullptr || device->handle == nullptr)
@@ -219,7 +219,7 @@ std::shared_ptr<ds3_pad_handler::ds3_device> ds3_pad_handler::get_ds3_device(con
 		return nullptr;
 
 	size_t pos = padId.find(m_name_string);
-	if (pos == std::string::npos)
+	if (pos == umax)
 		return nullptr;
 
 	int pad_number = std::stoi(padId.substr(pos + 9));
@@ -370,7 +370,7 @@ std::unordered_map<u64, u16> ds3_pad_handler::get_button_values(const std::share
 	return key_buf;
 }
 
-std::array<int, 6> ds3_pad_handler::get_preview_values(std::unordered_map<u64, u16> data)
+pad_preview_values ds3_pad_handler::get_preview_values(std::unordered_map<u64, u16> data)
 {
 	return { data[L2], data[R2], data[LSXPos] - data[LSXNeg], data[LSYPos] - data[LSYNeg], data[RSXPos] - data[RSXNeg], data[RSYPos] - data[RSYNeg] };
 }

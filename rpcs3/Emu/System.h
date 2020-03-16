@@ -26,6 +26,7 @@ enum class game_boot_result : u32
 	install_failed,
 	decryption_error,
 	file_creation_error,
+	firmware_missing,
 };
 
 struct EmuCallbacks
@@ -127,6 +128,11 @@ public:
 		return m_title;
 	}
 
+	const std::string GetTitleAndTitleID() const
+	{
+		return m_title + (m_title_id.empty() ? "" : " [" + m_title_id + "]");
+	}
+
 	const std::string& GetCat() const
 	{
 		return m_cat;
@@ -202,6 +208,8 @@ public:
 	void SetHasGui(bool has_gui) { m_has_gui = has_gui; }
 
 	std::string GetFormattedTitle(double fps) const;
+
+	u32 GetMaxThreads() const;
 };
 
 extern Emulator Emu;
