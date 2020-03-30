@@ -955,14 +955,15 @@ void spu_int_ctrl_t::set(u64 ints)
 	ints &= mask;
 
 	// notify if at least 1 bit was set
-	if (ints && ~stat.fetch_or(ints) & ints && !tag.expired())
+	if (ints && ~stat.fetch_or(ints) & ints)
 	{
-		reader_lock rlock(id_manager::g_mutex);
+		std::shared_lock rlock(id_manager::g_mutex);
 
 		if (const auto tag_ptr = tag.lock())
 		{
 			if (auto handler = tag_ptr->handler.lock())
 			{
+				rlock.unlock();
 				handler->exec();
 			}
 		}
@@ -1013,6 +1014,21 @@ std::string spu_thread::dump() const
 	std::string ret = cpu_thread::dump();
 
 	fmt::append(ret, "\nBlock Weight: %u (Retreats: %u)", block_counter, block_failure);
+
+	if (g_cfg.core.spu_prof)
+	{
+		// Get short function hash
+		const u64 name = atomic_storage<u64>::load(block_hash);
+
+		fmt::append(ret, "\nCurrent block: %s", fmt::base57(be_t<u64>{name}));
+
+		// Print only 7 hash characters out of 11 (which covers roughly 48 bits)
+		ret.resize(ret.size() - 4);
+
+		// Print chunk address from lowest 16 bits
+		fmt::append(ret, "...chunk-0x%05x", (name & 0xffff) * 4);
+	}
+
 	fmt::append(ret, "\n[%s]", ch_mfc_cmd);
 	fmt::append(ret, "\nLocal Storage: 0x%08x..0x%08x", offset, offset + 0x3ffff);
 	fmt::append(ret, "\nTag Mask: 0x%08x", ch_tag_mask);
@@ -1417,6 +1433,9 @@ void spu_thread::do_dma_transfer(const spu_mfc_cmd& args)
 
 			auto lock = vm::passive_lock(eal & -128, ::align(eal + size, 128));
 
+#ifdef __GNUG__
+			std::memcpy(dst, src, size);
+#else
 			while (size >= 128)
 			{
 				mov_rdata(*reinterpret_cast<decltype(spu_thread::rdata)*>(dst), *reinterpret_cast<const decltype(spu_thread::rdata)*>(src));
@@ -1434,6 +1453,7 @@ void spu_thread::do_dma_transfer(const spu_mfc_cmd& args)
 				src += 16;
 				size -= 16;
 			}
+#endif
 
 			lock->release(0);
 			break;
@@ -1467,6 +1487,9 @@ void spu_thread::do_dma_transfer(const spu_mfc_cmd& args)
 	}
 	default:
 	{
+#ifdef __GNUG__
+		std::memcpy(dst, src, size);
+#else
 		while (size >= 128)
 		{
 			mov_rdata(*reinterpret_cast<decltype(spu_thread::rdata)*>(dst), *reinterpret_cast<const decltype(spu_thread::rdata)*>(src));
@@ -1484,6 +1507,7 @@ void spu_thread::do_dma_transfer(const spu_mfc_cmd& args)
 			src += 16;
 			size -= 16;
 		}
+#endif
 
 		break;
 	}

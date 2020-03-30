@@ -46,7 +46,7 @@
 #define ASSUME(...) do { if (!(__VA_ARGS__)) __builtin_unreachable(); } while (0)  // note: the compiler will generate code to evaluate "cond" if the expression is opaque
 #endif
 
-#define SAFE_BUFFERS
+#define SAFE_BUFFERS __attribute__((no_stack_protector))
 #define NEVER_INLINE __attribute__((noinline))
 #define FORCE_INLINE __attribute__((always_inline)) inline
 #define RESTRICT __restrict__
@@ -822,19 +822,19 @@ struct alignas(A) any_pod
 
 	any_pod() = default;
 
-	template <typename T, typename T2 = TT<T>, typename = std::enable_if_t<std::is_pod<T2>::value && sizeof(T2) == S && alignof(T2) <= A>>
+	template <typename T, typename T2 = TT<T>, typename = std::enable_if_t<std::is_trivially_copyable_v<T> && sizeof(T2) == S && alignof(T2) <= A>>
 	any_pod(const T& value)
 	{
-		reinterpret_cast<T2&>(data) = value;
+		*this = std::bit_cast<any_pod>(value);
 	}
 
-	template <typename T, typename T2 = TT<T>, typename = std::enable_if_t<std::is_pod<T2>::value && sizeof(T2) == S && alignof(T2) <= A>>
+	template <typename T, typename T2 = TT<T>, typename = std::enable_if_t<std::is_trivially_copyable_v<T> && sizeof(T2) == S && alignof(T2) <= A>>
 	T2& as()
 	{
 		return reinterpret_cast<T2&>(data);
 	}
 
-	template <typename T, typename T2 = TT<T>, typename = std::enable_if_t<std::is_pod<T2>::value && sizeof(T2) == S && alignof(T2) <= A>>
+	template <typename T, typename T2 = TT<T>, typename = std::enable_if_t<std::is_trivially_copyable_v<T> && sizeof(T2) == S && alignof(T2) <= A>>
 	const T2& as() const
 	{
 		return reinterpret_cast<const T2&>(data);
@@ -899,7 +899,7 @@ struct cmd64 : any64
 	}
 };
 
-static_assert(sizeof(cmd64) == 8 && std::is_pod<cmd64>::value, "Incorrect cmd64 type");
+static_assert(sizeof(cmd64) == 8 && std::is_trivially_copyable_v<cmd64>, "Incorrect cmd64 type");
 
 // Error code type (return type), implements error reporting. Could be a template.
 struct error_code
