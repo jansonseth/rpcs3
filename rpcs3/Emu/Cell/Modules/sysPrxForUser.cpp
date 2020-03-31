@@ -269,7 +269,7 @@ DECLARE(ppu_module_manager::sysPrxForUser)("sysPrxForUser", []()
 	REG_FUNC(sysPrxForUser, sys_process_exit);
 	REG_FUNC(sysPrxForUser, _sys_process_atexitspawn);
 	REG_FUNC(sysPrxForUser, _sys_process_at_Exitspawn);
-	REG_FUNC(sysPrxForUser, sys_process_is_stack);
+	REG_FUNC(sysPrxForUser, sys_process_is_stack).flag(MFF_FORCED_HLE);
 	REG_FUNC(sysPrxForUser, sys_process_get_paramsfo); // 0xe75c40f2
 
 	REG_FUNC(sysPrxForUser, sys_get_random_number);
