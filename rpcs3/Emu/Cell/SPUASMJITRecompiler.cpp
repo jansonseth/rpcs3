@@ -675,7 +675,7 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 			}
 
 			// Determine which value will be duplicated at hole positions
-			const u32 w3 = func.data.at((j - start + ~utils::cntlz32(cmask, true) % 4 * 4) / 4);
+			const u32 w3 = func.data.at((j - start + ~static_cast<u32>(std::countl_zero(cmask)) % 4 * 4) / 4);
 			words.push_back(cmask & 1 ? func.data[(j - start + 0) / 4] : w3);
 			words.push_back(cmask & 2 ? func.data[(j - start + 4) / 4] : w3);
 			words.push_back(cmask & 4 ? func.data[(j - start + 8) / 4] : w3);
@@ -846,7 +846,7 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 		c->jmp(imm_ptr(spu_runtime::tr_dispatch));
 	}
 
-	for (auto&& work : decltype(after)(std::move(after)))
+	for (auto&& work : ::as_rvalue(std::move(after)))
 	{
 		work();
 	}
@@ -881,7 +881,7 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 	for (u32 d : words)
 		c->dd(d);
 
-	for (auto&& work : decltype(consts)(std::move(consts)))
+	for (auto&& work : ::as_rvalue(std::move(consts)))
 	{
 		work();
 	}

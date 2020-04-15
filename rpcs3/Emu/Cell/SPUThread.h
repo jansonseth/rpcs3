@@ -337,9 +337,9 @@ public:
 		});
 	}
 
-	u32 get_count()
+	u32 get_count() const
 	{
-		return values.raw().count;
+		return std::as_const(values).raw().count;
 	}
 
 	void set_values(u32 count, u32 value0, u32 value1 = 0, u32 value2 = 0, u32 value3 = 0)
@@ -498,7 +498,11 @@ public:
 class spu_thread : public cpu_thread
 {
 public:
-	virtual std::string dump() const override;
+	virtual std::string dump_all() const override;
+	virtual std::string dump_regs() const override;
+	virtual std::string dump_callstack() const override;
+	virtual std::vector<u32> dump_callstack_list() const override;
+	virtual std::string dump_misc() const override;
 	virtual void cpu_task() override final;
 	virtual void cpu_mem() override;
 	virtual void cpu_unmem() override;
@@ -615,6 +619,9 @@ public:
 
 	std::array<v128, 0x4000> stack_mirror; // Return address information
 
+	const char* current_func{}; // Current STOP or RDCH blocking function
+	u64 start_time{}; // Starting time of STOP or RDCH bloking function
+
 	void push_snr(u32 number, u32 value);
 	void do_dma_transfer(const spu_mfc_cmd& args);
 	bool do_dma_check(const spu_mfc_cmd& args);
@@ -663,5 +670,18 @@ public:
 		}
 
 		return -1;
+	}
+};
+
+class spu_function_logger
+{
+	spu_thread& spu;
+
+public:
+	spu_function_logger(spu_thread& spu, const char* func);
+
+	~spu_function_logger()
+	{
+		spu.start_time = 0;
 	}
 };

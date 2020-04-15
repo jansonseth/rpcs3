@@ -618,10 +618,12 @@ namespace rsx
 
 	public:
 		RsxDmaControl* ctrl = nullptr;
+		u32 dma_address{0};
 		rsx_iomap_table iomap_table;
 		u32 restore_point = 0;
 		atomic_t<u32> external_interrupt_lock{ 0 };
 		atomic_t<bool> external_interrupt_ack{ false };
+		bool is_fifo_idle() const;
 		void flush_fifo();
 		void recover_fifo();
 		static void fifo_wake_delay(u64 div = 1);
@@ -711,6 +713,8 @@ namespace rsx
 		 * returns whether surface is a render target and surface pitch in native format
 		 */
 		void get_current_fragment_program(const std::array<std::unique_ptr<rsx::sampled_image_descriptor_base>, rsx::limits::fragment_textures_count>& sampler_descriptors);
+	public:
+		bool invalidate_fragment_program(u32 dst_dma, u32 dst_offset, u32 size);
 
 	public:
 		u64 target_rsx_flip_time = 0;
@@ -723,8 +727,7 @@ namespace rsx
 		bool capture_current_frame = false;
 
 	public:
-		bool invalid_command_interrupt_raised = false;
-		bool sync_point_request = false;
+		atomic_t<bool> sync_point_request = false;
 		bool in_begin_end = false;
 
 		struct desync_fifo_cmd_info

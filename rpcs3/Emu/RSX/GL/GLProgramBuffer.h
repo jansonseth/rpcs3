@@ -42,9 +42,9 @@ struct GLTraits
 			.bind_fragment_data_location("ocol1", 1)
 			.bind_fragment_data_location("ocol2", 2)
 			.bind_fragment_data_location("ocol3", 3)
-			.make();
+			.link();
 
-		// Progam locations are guaranteed to not change after linking
+		// Program locations are guaranteed to not change after linking
 		// Texture locations are simply bound to the TIUs so this can be done once
 		for (int i = 0; i < rsx::limits::fragment_textures_count; ++i)
 		{

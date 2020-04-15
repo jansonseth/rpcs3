@@ -17,9 +17,12 @@
 #include <limits>
 #include <array>
 
-#if __has_include(<bit>)
-#include <bit>
+#ifdef _MSC_VER
+#ifndef __cpp_lib_bitops
+#define __cpp_lib_bitops
 #endif
+#endif
+#include <bit>
 
 #ifndef __has_builtin
 	#define __has_builtin(x) 0
@@ -166,6 +169,12 @@ using get_uint_t = typename get_int_impl<N>::utype;
 
 template <std::size_t N>
 using get_sint_t = typename get_int_impl<N>::stype;
+
+template <typename T>
+std::remove_cvref_t<T> as_rvalue(T&& obj)
+{
+    return std::forward<T>(obj);
+}
 
 // Formatting helper, type-specific preprocessing for improving safety and functionality
 template <typename T, typename = void>

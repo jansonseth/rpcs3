@@ -38,24 +38,6 @@ extern void sys_initialize_tls(ppu_thread&, u64, u32, u32, u32);
 // HLE function name cache
 std::vector<std::string> g_ppu_function_names;
 
-template <>
-void fmt_class_string<lib_loading_type>::format(std::string& out, u64 arg)
-{
-	format_enum(out, arg, [](lib_loading_type value)
-	{
-		switch (value)
-		{
-		case lib_loading_type::manual: return "Manually load selected libraries";
-		case lib_loading_type::hybrid: return "Load automatic and manual selection";
-		case lib_loading_type::liblv2only: return "Load liblv2.sprx only";
-		case lib_loading_type::liblv2both: return "Load liblv2.sprx and manual selection";
-		case lib_loading_type::liblv2list: return "Load liblv2.sprx and strict selection";
-		}
-
-		return unknown;
-	});
-}
-
 extern u32 ppu_generate_id(const char* name)
 {
 	// Symbol name suffix
@@ -1279,6 +1261,8 @@ void ppu_load_exec(const ppu_exec_object& elf)
 			tls_vaddr = vm::cast(prog.p_vaddr, HERE);
 			tls_fsize = ::narrow<u32>(prog.p_filesz, "p_filesz" HERE);
 			tls_vsize = ::narrow<u32>(prog.p_memsz, "p_memsz" HERE);
+
+			ppu_loader.notice("TLS info segment found: tls-image=*0x%x, image-size=0x%x, tls-size=0x%x", tls_vaddr, tls_fsize, tls_vsize);
 			break;
 		}
 
@@ -1543,7 +1527,7 @@ void ppu_load_exec(const ppu_exec_object& elf)
 		ppu->gpr[1] -= Emu.data.size();
 	}
 
-	g_fxo->init<lv2_memory_container>(mem_user1m_size);
+	g_fxo->init<lv2_memory_container>(mem_user1m_size)->used += primary_stacksize;
 
 	ppu->cmd_push({ppu_cmd::initialize, 0});
 

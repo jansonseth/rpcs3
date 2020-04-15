@@ -166,6 +166,10 @@ usb_handler_thread::usb_handler_thread()
 		{
 			found_skylander = true;
 		}
+
+		check_device(0x0E6F, 0x0241, 0x0241, "Lego Dimensions Portal");
+		check_device(0x0E6F, 0x0129, 0x0129, "Disney Infinity Portal");
+
 		check_device(0x1415, 0x0000, 0x0000, "Singstar Microphone");
 		check_device(0x12BA, 0x0100, 0x0100, "Guitar Hero Guitar");
 		check_device(0x12BA, 0x0120, 0x0120, "Guitar Hero Drums");
@@ -473,7 +477,7 @@ error_code sys_usbd_finalize(ppu_thread& ppu, u32 handle)
 	usbh->is_init = false;
 
 	// Forcefully awake all waiters
-	for (auto& cpu : decltype(usbh->sq)(std::move(usbh->sq)))
+	for (auto& cpu : ::as_rvalue(std::move(usbh->sq)))
 	{
 		// Special ternimation signal value
 		cpu->gpr[4] = 4;

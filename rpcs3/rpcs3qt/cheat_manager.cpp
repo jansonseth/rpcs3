@@ -245,12 +245,12 @@ bool cheat_engine::resolve_script(u32& final_offset, const u32 offset, const std
 
 	while (index < red_script.size())
 	{
-		if (red_script[index] >= '0' && red_script[index] <= '9')
+		if (std::isdigit(static_cast<u8>(red_script[index])))
 		{
 			std::string num_string;
 			for (; index < red_script.size(); index++)
 			{
-				if (red_script[index] < '0' || red_script[index] > '9')
+				if (!std::isdigit(static_cast<u8>(red_script[index])))
 					break;
 
 				num_string += red_script[index];
@@ -304,6 +304,7 @@ bool cheat_engine::resolve_script(u32& final_offset, const u32 offset, const std
 					return false;
 
 				do_operation(cur_op, final_offset, res_value);
+				break;
 			}
 			case '+':
 				cur_op = operand_add;
@@ -348,15 +349,15 @@ std::vector<u32> cheat_engine::search(const T value, const std::vector<u32>& to_
 	else
 	{
 		// Looks through mapped memory
-		for (u32 page_ind = (0x10000 / 4096); page_ind < (0xF0000000 / 4096); page_ind++)
+		for (u32 page_start = 0x10000; page_start < 0xF0000000; page_start += 4096)
 		{
-			if (vm::check_addr(page_ind * 4096))
+			if (vm::check_addr(page_start))
 			{
 				// Assumes the values are aligned
 				for (u32 index = 0; index < 4096; index += sizeof(T))
 				{
-					if (*vm::get_super_ptr<T>((page_ind * 4096) + index) == value_swapped)
-						results.push_back((page_ind * 4096) + index);
+					if (*vm::get_super_ptr<T>(page_start + index) == value_swapped)
+						results.push_back(page_start + index);
 				}
 			}
 		}
@@ -552,9 +553,8 @@ cheat_manager_dialog::cheat_manager_dialog(QWidget* parent)
 
 	for (u64 i = 0; i < cheat_type_max; i++)
 	{
-		std::string type_formatted;
-		fmt::append(type_formatted, "%s", static_cast<cheat_type>(i));
-		cbx_cheat_search_type->insertItem(i, QString::fromStdString(type_formatted));
+		const QString item_text = get_localized_cheat_type(static_cast<cheat_type>(i));
+		cbx_cheat_search_type->addItem(item_text);
 	}
 	cbx_cheat_search_type->setCurrentIndex(static_cast<u8>(cheat_type::signed_32_cheat));
 	grp_add_cheat_sub_layout->addWidget(btn_new_search);
@@ -1011,4 +1011,25 @@ void cheat_manager_dialog::update_cheat_list()
 	}
 
 	g_cheat.save();
+}
+
+QString cheat_manager_dialog::get_localized_cheat_type(cheat_type type)
+{
+	switch (type)
+	{
+	case cheat_type::unsigned_8_cheat: return tr("Unsigned 8 bits");
+	case cheat_type::unsigned_16_cheat: return tr("Unsigned 16 bits");
+	case cheat_type::unsigned_32_cheat: return tr("Unsigned 32 bits");
+	case cheat_type::unsigned_64_cheat: return tr("Unsigned 64 bits");
+	case cheat_type::signed_8_cheat: return tr("Signed 8 bits");
+	case cheat_type::signed_16_cheat: return tr("Signed 16 bits");
+	case cheat_type::signed_32_cheat: return tr("Signed 32 bits");
+	case cheat_type::signed_64_cheat: return tr("Signed 64 bits");
+	case cheat_type::max:
+	default:
+		break;
+	}
+	std::string type_formatted;
+	fmt::append(type_formatted, "%s", type);
+	return QString::fromStdString(type_formatted);
 }

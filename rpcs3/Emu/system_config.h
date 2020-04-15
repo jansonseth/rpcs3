@@ -45,12 +45,15 @@ struct cfg_root : cfg::node
 		cfg::_enum<tsx_usage> enable_TSX{ this, "Enable TSX", tsx_usage::enabled }; // Enable TSX. Forcing this on Haswell/Broadwell CPUs should be used carefully
 		cfg::_bool spu_accurate_xfloat{ this, "Accurate xfloat", false };
 		cfg::_bool spu_approx_xfloat{ this, "Approximate xfloat", true };
+		cfg::_bool llvm_accurate_dfma{ this, "LLVM Accurate DFMA", true }; // Enable accurate double-precision FMA for CPUs which do not support it natively
 
 		cfg::_bool debug_console_mode{ this, "Debug Console Mode", false }; // Debug console emulation, not recommended
 		cfg::_enum<lib_loading_type> lib_loading{ this, "Lib Loader", lib_loading_type::liblv2only };
 		cfg::_bool hook_functions{ this, "Hook static functions" };
 		cfg::set_entry load_libraries{ this, "Load libraries" };
 		cfg::_bool hle_lwmutex{ this, "HLE lwmutex" }; // Force alternative lwmutex/lwcond implementation
+		cfg::uint64 spu_llvm_lower_bound{ this, "SPU LLVM Lower Bound" };
+		cfg::uint64 spu_llvm_upper_bound{ this, "SPU LLVM Upper Bound", 0xffffffffffffffff };
 
 		cfg::_int<10, 3000> clocks_scale{ this, "Clocks scale", 100, true }; // Changing this from 100 (percentage) may affect game speed in unexpected ways
 		cfg::_enum<sleep_timers_accuracy_level> sleep_timers_accuracy{ this, "Sleep Timers Accuracy",
@@ -74,12 +77,12 @@ struct cfg_root : cfg::node
 		cfg::string dev_usb000{ this, "/dev_usb000/", "$(EmulatorDir)dev_usb000/" };
 		cfg::string dev_bdvd{ this, "/dev_bdvd/" }; // Not mounted
 		cfg::string app_home{ this, "/app_home/" }; // Not mounted
-	
+
 		std::string get_dev_flash() const
 		{
 			return get(dev_flash, "dev_flash/");
 		}
-	
+
 		cfg::_bool host_root{ this, "Enable /host_root/" };
 		cfg::_bool init_dirs{ this, "Initialize Directories", true };
 
@@ -115,25 +118,26 @@ struct cfg_root : cfg::node
 		cfg::_bool disable_zcull_queries{ this, "Disable ZCull Occlusion Queries", false };
 		cfg::_bool disable_vertex_cache{ this, "Disable Vertex Cache", false };
 		cfg::_bool disable_FIFO_reordering{ this, "Disable FIFO Reordering", false };
-		cfg::_bool frame_skip_enabled{ this, "Enable Frame Skip", false };
+		cfg::_bool frame_skip_enabled{ this, "Enable Frame Skip", false, true };
 		cfg::_bool force_cpu_blit_processing{ this, "Force CPU Blit", false, true }; // Debugging option
 		cfg::_bool disable_on_disk_shader_cache{ this, "Disable On-Disk Shader Cache", false };
 		cfg::_bool disable_vulkan_mem_allocator{ this, "Disable Vulkan Memory Allocator", false };
-		cfg::_bool full_rgb_range_output{ this, "Use full RGB output range", true }; // Video out dynamic range
+		cfg::_bool full_rgb_range_output{ this, "Use full RGB output range", true, true }; // Video out dynamic range
 		cfg::_bool disable_asynchronous_shader_compiler{ this, "Disable Asynchronous Shader Compiler", false };
 		cfg::_bool strict_texture_flushing{ this, "Strict Texture Flushing", false };
 		cfg::_bool disable_native_float16{ this, "Disable native float16 support", false };
 		cfg::_bool multithreaded_rsx{ this, "Multithreaded RSX", false };
 		cfg::_bool relaxed_zcull_sync{ this, "Relaxed ZCULL Sync", false };
 		cfg::_bool enable_3d{ this, "Enable 3D", false };
-		cfg::_int<1, 8> consequtive_frames_to_draw{ this, "Consecutive Frames To Draw", 1 };
-		cfg::_int<1, 8> consequtive_frames_to_skip{ this, "Consecutive Frames To Skip", 1 };
+		cfg::_int<1, 8> consecutive_frames_to_draw{ this, "Consecutive Frames To Draw", 1, true};
+		cfg::_int<1, 8> consecutive_frames_to_skip{ this, "Consecutive Frames To Skip", 1, true};
 		cfg::_int<50, 800> resolution_scale_percent{ this, "Resolution Scale", 100 };
-		cfg::_int<0, 16> anisotropic_level_override{ this, "Anisotropic Filter Override", 0 };
+		cfg::_int<0, 16> anisotropic_level_override{ this, "Anisotropic Filter Override", 0, true };
 		cfg::_int<1, 1024> min_scalable_dimension{ this, "Minimum Scalable Dimension", 16 };
 		cfg::_int<0, 30000000> driver_recovery_timeout{ this, "Driver Recovery Timeout", 1000000, true };
 		cfg::_int<0, 16667> driver_wakeup_delay{ this, "Driver Wake-Up Delay", 1, true };
 		cfg::_int<1, 1800> vblank_rate{ this, "Vblank Rate", 60, true }; // Changing this from 60 may affect game speed in unexpected ways
+		cfg::_bool decr_memory_layout{ this, "DECR memory layout", false}; // Force enable increased allowed main memory range as DECR console
 
 		struct node_vk : cfg::node
 		{
@@ -250,7 +254,7 @@ struct cfg_root : cfg::node
 		cfg::_enum<np_psn_status> psn_status{this, "PSN status", np_psn_status::disabled};
 		cfg::string psn_npid{this, "NPID", ""};
 	} net{this};
-	
+
 	struct node_misc : cfg::node
 	{
 		node_misc(cfg::node* _this) : cfg::node(_this, "Miscellaneous") {}
@@ -263,13 +267,13 @@ struct cfg_root : cfg::node
 		cfg::_bool show_shader_compilation_hint{ this, "Show shader compilation hint", true, true };
 		cfg::_bool use_native_interface{ this, "Use native user interface", true };
 		cfg::string gdb_server{ this, "GDB Server", "127.0.0.1:2345" };
-		cfg::_bool silence_all_logs{ this, "Silence All Logs", false, false };
+		cfg::_bool silence_all_logs{ this, "Silence All Logs", false, true };
 		cfg::string title_format{ this, "Window Title Format", "FPS: %F | %R | %V | %T [%t]", true };
-	
+
 	} misc{ this };
-	
+
 	cfg::log_entry log{ this, "Log" };
-	
+
 	std::string name;
 };
 

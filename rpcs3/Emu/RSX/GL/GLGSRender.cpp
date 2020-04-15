@@ -76,6 +76,7 @@ void GLGSRender::on_init_thread()
 
 	// Bind primary context to main RSX thread
 	m_frame->set_current(m_context);
+	gl::set_primary_context_thread();
 
 	zcull_ctrl.reset(static_cast<::rsx::reports::ZCULL_control*>(this));
 
@@ -507,7 +508,7 @@ void GLGSRender::clear_surface(u32 arg)
 			{
 				verify(HERE), mask;
 
-				// Only one aspect was cleared. Make sure to memory intialize the other before removing dirty flag
+				// Only one aspect was cleared. Make sure to memory initialize the other before removing dirty flag
 				if (arg == 1)
 				{
 					// Depth was cleared, initialize stencil
@@ -548,7 +549,7 @@ void GLGSRender::clear_surface(u32 arg)
 		case rsx::surface_color_format::g8b8:
 		{
 			colormask = rsx::get_g8b8_r8g8_colormask(colormask);
-			// Fall through
+			[[fallthrough]];
 		}
 		default:
 		{
@@ -624,6 +625,11 @@ bool GLGSRender::load_program()
 				}
 			}
 		}
+	}
+	else
+	{
+		verify(HERE), m_program;
+		m_program->sync();
 	}
 
 	return m_program != nullptr;
@@ -946,13 +952,5 @@ void GLGSRender::on_decompiler_exit()
 
 bool GLGSRender::on_decompiler_task()
 {
-	const auto result = m_prog_buffer.async_update(8);
-	if (result.second)
-	{
-		// TODO: Proper synchronization with renderer
-		// Finish works well enough for now but it is not a proper soulution
-		glFinish();
-	}
-
-	return result.first;
+	return m_prog_buffer.async_update(8).first;
 }

@@ -51,10 +51,7 @@ namespace rsx
 			std::unordered_set<u64>& mem_changes = frame_capture.replay_commands.back().memory_state;
 
 			// capture fragment shader mem
-			const u32 shader_program = method_registers.shader_program_address();
-
-			const u32 program_location = (shader_program & 0x3) - 1;
-			const u32 program_offset   = (shader_program & ~0x3);
+			const auto [program_offset, program_location] = method_registers.shader_program_address();
 
 			const u32 addr          = get_address(program_offset, program_location, HERE);
 			const auto program_info = program_hash_util::fragment_program_utils::analyse_fragment_program(vm::base(addr));
@@ -374,8 +371,8 @@ namespace rsx
 				auto& tstate = tilestate.tiles[i];
 				tstate.tile = tile.tile;
 				tstate.limit = tile.limit;
-				tstate.pitch = rsx->tiles[i].binded ? u32{tile.pitch} : 0;
-				tstate.format = rsx->tiles[i].binded ? u32{tile.format} : 0;
+				tstate.pitch = rsx->tiles[i].bound ? u32{tile.pitch} : 0;
+				tstate.format = rsx->tiles[i].bound ? u32{tile.format} : 0;
 			}
 
 			for (u32 i = 0; i < limits::zculls_count; ++i)
@@ -386,8 +383,8 @@ namespace rsx
 				zcstate.size = zc.size;
 				zcstate.start = zc.start;
 				zcstate.offset = zc.offset;
-				zcstate.status0 = rsx->zculls[i].binded ? u32{zc.status0} : 0;
-				zcstate.status1 = rsx->zculls[i].binded ? u32{zc.status1} : 0;
+				zcstate.status0 = rsx->zculls[i].bound ? u32{zc.status0} : 0;
+				zcstate.status1 = rsx->zculls[i].bound ? u32{zc.status1} : 0;
 			}
 
 			const u64 tsnum = XXH64(&tilestate, sizeof(frame_capture_data::tile_state), 0);

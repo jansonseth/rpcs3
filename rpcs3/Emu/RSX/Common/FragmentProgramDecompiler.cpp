@@ -85,6 +85,7 @@ void FragmentProgramDecompiler::SetDst(std::string code, u32 flags)
 				// NOTE: Sometimes varying inputs from VS are out of range so do not exempt any input types, unless fp16 (Naruto UNS)
 				if (dst.fp16 && src0.fp16 && src0.reg_type == RSX_FP_REGISTER_TYPE_TEMP)
 					break;
+				[[fallthrough]];
 			default:
 			{
 				// fp16 precsion flag on f32 register; ignore
@@ -906,7 +907,7 @@ bool FragmentProgramDecompiler::handle_sct_scb(u32 opcode)
 
 	// SCB-only ops
 	case RSX_FP_OPCODE_COS: SetDst("cos($0.xxxx)"); return true;
-	case RSX_FP_OPCODE_DST: SetDst("distance($0, $1).xxxx", OPFLAGS::src_cast_f32); return true;
+	case RSX_FP_OPCODE_DST: SetDst("$Ty(1.0, $0.y * $1.y, $0.z, $1.w)", OPFLAGS::op_extern); return true;
 	case RSX_FP_OPCODE_REFL: SetDst(getFunction(FUNCTION::FUNCTION_REFL), OPFLAGS::op_extern); return true;
 	case RSX_FP_OPCODE_EX2: SetDst("exp2($0.xxxx)"); return true;
 	case RSX_FP_OPCODE_FLR: SetDst("floor($0)"); return true;
@@ -942,6 +943,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 		//Untested, should be x2d followed by TEX
 		AddX2d();
 		AddCode(Format("x2d = $0.xyxy + $1.xxxx * $2.xzxz + $1.yyyy * $2.ywyw;", true));
+		[[fallthrough]];
 	case RSX_FP_OPCODE_TEX:
 		AddTex();
 		switch (m_prog.get_texture_dimension(dst.tex_num))
@@ -974,6 +976,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 		//Untested, should be x2d followed by TXP
 		AddX2d();
 		AddCode(Format("x2d = $0.xyxy + $1.xxxx * $2.xzxz + $1.yyyy * $2.ywyw;", true));
+		[[fallthrough]];
 	case RSX_FP_OPCODE_TXP:
 		AddTex();
 		switch (m_prog.get_texture_dimension(dst.tex_num))

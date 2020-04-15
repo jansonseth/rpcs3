@@ -280,7 +280,7 @@ struct cpu_counter
 			if (ok) [[likely]]
 			{
 				// Get actual slot number
-				array_slot = i * 64 + utils::cnttz64(~bits, false);
+				array_slot = i * 64 + std::countr_one(bits);
 				break;
 			}
 		}
@@ -314,7 +314,7 @@ void for_all_cpu(F&& func) noexcept
 	{
 		for (u64 bits = ctr->cpu_array_bits[i]; bits; bits &= bits - 1)
 		{
-			const u64 index = i * 64 + utils::cnttz64(bits, true);
+			const u64 index = i * 64 + std::countr_zero(bits);
 
 			if (cpu_thread* cpu = ctr->cpu_array[index].load())
 			{
@@ -359,14 +359,23 @@ void cpu_thread::operator()()
 		std::this_thread::sleep_for(1ms);
 	}
 
-	if (id_type() == 1 && false)
+	switch (id_type())
 	{
-		g_fxo->get<cpu_profiler>()->registered.push(id);
+	case 1:
+	{
+		//g_fxo->get<cpu_profiler>()->registered.push(id);
+		break;
 	}
-
-	if (id_type() == 2 && g_cfg.core.spu_prof)
+	case 2:
 	{
-		g_fxo->get<cpu_profiler>()->registered.push(id);
+		if (g_cfg.core.spu_prof)
+		{
+			g_fxo->get<cpu_profiler>()->registered.push(id);
+		}
+
+		break;
+	}
+	default: break;
 	}
 
 	// Register thread in g_cpu_array
@@ -412,7 +421,7 @@ void cpu_thread::operator()()
 		{
 			if (_this)
 			{
-				sys_log.warning("CPU Thread '%s' terminated abnormally:\n%s", name, _this->dump());
+				sys_log.warning("CPU Thread '%s' terminated abnormally:\n%s", name, _this->dump_all());
 				cleanup();
 			}
 		}
@@ -599,7 +608,27 @@ std::string cpu_thread::get_name() const
 	}
 }
 
-std::string cpu_thread::dump() const
+std::string cpu_thread::dump_all() const
+{
+	return {};
+}
+
+std::string cpu_thread::dump_regs() const
+{
+	return {};
+}
+
+std::string cpu_thread::dump_callstack() const
+{
+	return {};
+}
+
+std::vector<u32> cpu_thread::dump_callstack_list() const
+{
+	return {};
+}
+
+std::string cpu_thread::dump_misc() const
 {
 	return fmt::format("Type: %s\n" "State: %s\n", typeid(*this).name(), state.load());
 }

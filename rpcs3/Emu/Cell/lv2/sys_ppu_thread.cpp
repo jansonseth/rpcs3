@@ -5,9 +5,11 @@
 
 #include "Emu/Cell/ErrorCodes.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/PPUCallback.h"
 #include "sys_event.h"
 #include "sys_process.h"
 #include "sys_mmapper.h"
+#include "sys_memory.h"
 
 LOG_CHANNEL(sys_ppu_thread);
 
@@ -361,20 +363,39 @@ error_code _sys_ppu_thread_create(vm::ptr<u64> thread_id, vm::ptr<ppu_thread_par
 		return CELL_EPERM;
 	}
 
+	const ppu_func_opd_t entry = param->entry.opd();
+	const u32 tls = param->tls;
+
 	// Clean some detached thread (hack)
 	g_fxo->get<ppu_thread_cleaner>()->clean(0);
 
 	// Compute actual stack size and allocate
 	const u32 stack_size = ::align<u32>(std::max<u32>(_stacksz, 4096), 4096);
 
-	const vm::addr_t stack_base{vm::alloc(stack_size, vm::stack, 4096)};
+	const auto dct = g_fxo->get<lv2_memory_container>();
 
-	if (!stack_base)
+	// Try to obtain "physical memory" from the default container
+	if (!dct->take(stack_size))
 	{
 		return CELL_ENOMEM;
 	}
 
+	const vm::addr_t stack_base{vm::alloc(stack_size, vm::stack, 4096)};
+
+	if (!stack_base)
+	{
+		dct->used -= stack_size;
+		return CELL_ENOMEM;
+	}
+
 	std::string ppu_name;
+
+	if (threadname)
+	{
+		constexpr u32 max_size = 27; // max size including null terminator
+		const auto pname = threadname.get_ptr();
+		ppu_name.assign(pname, std::find(pname, pname + max_size, '\0'));
+	}
 
 	const u32 tid = idm::import<named_thread<ppu_thread>>([&]()
 	{
@@ -384,10 +405,6 @@ error_code _sys_ppu_thread_create(vm::ptr<u64> thread_id, vm::ptr<ppu_thread_par
 
 		if (threadname)
 		{
-			constexpr u32 max_size = 27; // max size including null terminator
-			const auto pname = threadname.get_ptr();
-			ppu_name.assign(pname, std::find(pname, pname + max_size, '\0'));
-
 			if (!ppu_name.empty())
 			{
 				fmt::append(full_name, " (%s)", ppu_name);
@@ -397,8 +414,8 @@ error_code _sys_ppu_thread_create(vm::ptr<u64> thread_id, vm::ptr<ppu_thread_par
 		ppu_thread_params p;
 		p.stack_addr = stack_base;
 		p.stack_size = stack_size;
-		p.tls_addr = param->tls;
-		p.entry = param->entry;
+		p.tls_addr = tls;
+		p.entry = entry;
 		p.arg0 = arg;
 		p.arg1 = unk;
 
@@ -408,11 +425,12 @@ error_code _sys_ppu_thread_create(vm::ptr<u64> thread_id, vm::ptr<ppu_thread_par
 	if (!tid)
 	{
 		vm::dealloc(stack_base);
+		dct->used -= stack_size;
 		return CELL_EAGAIN;
 	}
 
 	*thread_id = tid;
-	sys_ppu_thread.warning(u8"_sys_ppu_thread_create(): Thread “%s” created (id=0x%x)", ppu_name, tid);
+	sys_ppu_thread.warning(u8"_sys_ppu_thread_create(): Thread “%s” created (id=0x%x, func=*0x%x, rtoc=0x%x, user-tls=0x%x)", ppu_name, tid, entry.addr, entry.rtoc, tls);
 	return CELL_OK;
 }
 

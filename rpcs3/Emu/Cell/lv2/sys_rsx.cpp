@@ -38,6 +38,57 @@ u64 rsxTimeStamp()
 	return get_timebased_time();
 }
 
+void lv2_rsx_config::send_event(u64 data1, u64 event_flags, u64 data3) const
+{
+	// Filter event bits, send them only if they are masked by gcm
+	// Except the upper 32-bits, they are reserved for unmapped io events and execute unconditionally
+	event_flags &= vm::_ref<RsxDriverInfo>(driver_info).handlers | 0xffff'ffffull << 32;
+
+	if (!event_flags)
+	{
+		// Nothing to do
+		return;
+	}
+
+	auto error = sys_event_port_send(rsx_event_port, data1, event_flags, data3);
+
+	while (error + 0u == CELL_EBUSY)
+	{
+		auto cpu = get_current_cpu_thread();
+
+		if (cpu && cpu->id_type() != 1)
+		{
+			cpu = nullptr;
+		}
+
+		if (cpu)
+		{
+			// Deschedule
+			lv2_obj::sleep(*cpu, 100);
+		}
+		else if (const auto rsx = rsx::get_current_renderer(); rsx->is_current_thread())
+		{
+			rsx->on_semaphore_acquire_wait();
+		}
+		
+		// Wait a bit before resending event
+		thread_ctrl::wait_for(100);
+
+		if (Emu.IsStopped() || (cpu && cpu->check_state()))
+		{
+			error = 0;
+			break;
+		}
+
+		error = sys_event_port_send(rsx_event_port, data1, event_flags, data3);
+	}
+
+	if (error && error + 0u != CELL_ENOTCONN)
+	{
+		fmt::throw_exception("lv2_rsx_config::send_event() Failed to send event! (error=%x)" HERE, +error);
+	}
+}
+
 error_code sys_rsx_device_open()
 {
 	sys_rsx.todo("sys_rsx_device_open()");
@@ -198,11 +249,14 @@ error_code sys_rsx_context_allocate(vm::ptr<u32> context_id, vm::ptr<u64> lpar_d
 	sys_event_queue_create(vm::get_addr(&driverInfo.handler_queue), attr, 0, 0x20);
 	sys_event_port_connect_local(rsx_cfg->rsx_event_port, driverInfo.handler_queue);
 
+	rsx_cfg->dma_address = vm::cast(*lpar_dma_control, HERE);
+
 	const auto render = rsx::get_current_renderer();
 	render->display_buffers_count = 0;
 	render->current_display_buffer = 0;
 	render->label_addr = vm::cast(*lpar_reports, HERE);
 	render->device_addr = rsx_cfg->device_addr;
+	render->dma_address = rsx_cfg->dma_address;
 	render->local_mem_size = rsx_cfg->memory_size;
 	render->init(vm::cast(*lpar_dma_control, HERE));
 
@@ -252,6 +306,11 @@ error_code sys_rsx_context_iomap(u32 context_id, u32 io, u32 ea, u32 size, u64 f
 		return CELL_EINVAL;
 	}
 
+	if (!render->is_fifo_idle())
+	{
+		sys_rsx.warning("sys_rsx_context_iomap(): RSX is not idle while mapping io");
+	}
+
 	vm::reader_lock rlock;
 
 	for (u32 addr = ea, end = ea + size; addr < end; addr += 0x100000)
@@ -296,6 +355,11 @@ error_code sys_rsx_context_iounmap(u32 context_id, u32 io, u32 size)
 			render->main_mem_size < io + u64{size})
 	{
 		return CELL_EINVAL;
+	}
+
+	if (!render->is_fifo_idle())
+	{
+		sys_rsx.warning("sys_rsx_context_iounmap(): RSX is not idle while unmapping io");
 	}
 
 	vm::reader_lock rlock;
@@ -346,12 +410,15 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 	switch (package_id)
 	{
 	case 0x001: // FIFO
+	{
 		render->pause();
-		render->ctrl->get = static_cast<u32>(a3);
-		render->ctrl->put = static_cast<u32>(a4);
-		render->restore_point = static_cast<u32>(a3);
+		const u64 get = static_cast<u32>(a3);
+		const u64 put = static_cast<u32>(a4);
+		vm::_ref<atomic_be_t<u64>>(rsx_cfg->dma_address + ::offset32(&RsxDmaControl::put)).release(put << 32 | get);
+		render->sync_point_request.release(true);
 		render->unpause();
 		break;
+	}
 
 	case 0x100: // Display mode set
 		break;
@@ -368,6 +435,9 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		// otherwise it contains a display buffer offset
 		if ((a4 & 0x80000000) != 0)
 		{
+			// NOTE: There currently seem to only be 2 active heads on PS3
+			verify(HERE), a3 < 2;
+
 			// last half byte gives buffer, 0xf seems to trigger just last queued
 			u8 idx_check = a4 & 0xf;
 			if (idx_check > 7)
@@ -405,14 +475,13 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 
 	case 0x103: // Display Queue
 	{
-		driverInfo.head[a3].lastQueuedBufferId = static_cast<u32>(a4);
-		driverInfo.head[a3].flipFlags |= 0x40000000 | (1 << a4);
-
 		// NOTE: There currently seem to only be 2 active heads on PS3
 		verify(HERE), a3 < 2;
 
-		const u64 shift_offset = (a3 + 5);
-		sys_event_port_send(rsx_cfg->rsx_event_port, 0, (1ull << shift_offset), 0);
+		driverInfo.head[a3].lastQueuedBufferId = static_cast<u32>(a4);
+		driverInfo.head[a3].flipFlags |= 0x40000000 | (1 << a4);
+
+		rsx_cfg->send_event(0, SYS_RSX_EVENT_QUEUE_BASE << a3, 0);
 
 		render->on_frame_end(static_cast<u32>(a4));
 	}
@@ -425,6 +494,10 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		{
 			return SYS_RSX_CONTEXT_ATTRIBUTE_ERROR;
 		}
+
+		std::lock_guard lock(s_rsxmem_mtx);
+
+		// Note: no error checking is being done
 
 		const u32 width = (a4 >> 32) & 0xFFFFFFFF;
 		const u32 height = a4 & 0xFFFFFFFF;
@@ -461,9 +534,13 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 			return SYS_RSX_CONTEXT_ATTRIBUTE_ERROR;
 		}
 
-		u32 flipStatus = driverInfo.head[a3].flipFlags;
-		flipStatus = (flipStatus & static_cast<u32>(a4)) | static_cast<u32>(a5);
-		driverInfo.head[a3].flipFlags = flipStatus;
+		// NOTE: There currently seem to only be 2 active heads on PS3
+		verify(HERE), a3 < 2;
+
+		driverInfo.head[a3].flipFlags.atomic_op([&](be_t<u32>& flipStatus)
+		{
+			flipStatus = (flipStatus & static_cast<u32>(a4)) | static_cast<u32>(a5);
+		});
 	}
 	break;
 
@@ -477,21 +554,79 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		//a5 high bits = ret.pitch = (pitch / 0x100) << 8;
 		//a5 low bits = ret.format = base | ((base + ((size - 1) / 0x10000)) << 13) | (comp << 26) | (1 << 30);
 
+		verify(HERE), a3 < std::size(render->tiles);
+
+		if (!render->is_fifo_idle())
+		{
+			sys_rsx.warning("sys_rsx_context_attribute(): RSX is not idle while setting tile");
+		}
+
 		auto& tile = render->tiles[a3];
 
-		// When tile is going to be unbinded, we can use it as a hint that the address will no longer be used as a surface and can be removed/invalidated
+		const u32 location = ((a4 >> 32) & 0x3) - 1;
+		const u32 offset = ((((a4 >> 32) & 0x7FFFFFFF) >> 16) * 0x10000);
+		const u32 size = ((((a4 & 0x7FFFFFFF) >> 16) + 1) * 0x10000) - offset;
+		const u32 pitch = (((a5 >> 32) & 0xFFFFFFFF) >> 8) * 0x100;
+		const u32 comp = ((a5 & 0xFFFFFFFF) >> 26) & 0xF;
+		const u32 base = (a5 & 0xFFFFFFFF) & 0x7FF;
+		const u32 bank = (((a4 >> 32) & 0xFFFFFFFF) >> 4) & 0xF;
+		const bool bound = ((a4 >> 32) & 0x3) != 0;
+
+		const auto range = utils::address_range::start_length(offset, size);
+
+		if (bound)
+		{
+			if (!size || !pitch)
+			{
+				return CELL_EINVAL;
+			}
+
+			u32 limit = UINT32_MAX;
+
+			switch (location)
+			{
+			case CELL_GCM_LOCATION_MAIN: limit = render->main_mem_size; break;
+			case CELL_GCM_LOCATION_LOCAL: limit = render->local_mem_size; break;
+			default: fmt::throw_exception("sys_rsx_context_attribute(): Unexpected location value (location=0x%x)" HERE, location);
+			}
+
+			if (!range.valid() || range.end >= limit)
+			{
+				return CELL_EINVAL;
+			}
+
+			// Hardcoded value in gcm
+			verify(HERE), !!(a5 & (1 << 30));
+		}
+
+		std::lock_guard lock(s_rsxmem_mtx);
+
+		// When tile is going to be unbound, we can use it as a hint that the address will no longer be used as a surface and can be removed/invalidated
 		// Todo: There may be more checks such as format/size/width can could be done
-		if (tile.binded && a5 == 0)
+		if (tile.bound && !bound)
 			render->notify_tile_unbound(static_cast<u32>(a3));
 
-		tile.location = ((a4 >> 32) & 0xF) - 1;
-		tile.offset = ((((a4 >> 32) & 0x7FFFFFFF) >> 16) * 0x10000);
-		tile.size = ((((a4 & 0x7FFFFFFF) >> 16) + 1) * 0x10000) - tile.offset;
-		tile.pitch = (((a5 >> 32) & 0xFFFFFFFF) >> 8) * 0x100;
-		tile.comp = ((a5 & 0xFFFFFFFF) >> 26) & 0xF;
-		tile.base = (a5 & 0xFFFFFFFF) & 0x7FF;
-		tile.bank = (((a4 >> 32) & 0xFFFFFFFF) >> 4) & 0xF;
-		tile.binded = a5 != 0;
+		if (location == CELL_GCM_LOCATION_MAIN && bound)
+		{
+			vm::reader_lock rlock;
+
+			for (u32 offs = (offset & ~0xfffff); offs <= range.end; offs += 0x100000)
+			{
+				if (render->iomap_table.io[offs >> 20] == umax)
+				{
+					return CELL_EINVAL;
+				}
+			}
+		}
+
+		tile.location = location;
+		tile.offset = offset;
+		tile.size = size;
+		tile.pitch = pitch;
+		tile.comp = comp;
+		tile.base = base;
+		tile.bank = base;
+		tile.bound = bound;
 	}
 	break;
 
@@ -504,19 +639,43 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		//a6 high = status0 = (zcullDir << 1) | (zcullFormat << 2) | ((sFunc & 0xF) << 12) | (sRef << 16) | (sMask << 24);
 		//a6 low = status1 = (0x2000 << 0) | (0x20 << 16);
 
+		verify(HERE), a3 < std::size(render->zculls);
+
+		if (!render->is_fifo_idle())
+		{
+			sys_rsx.warning("sys_rsx_context_attribute(): RSX is not idle while setting zcull");
+		}
+
+		const u32 offset = (a5 & 0xFFFFFFFF);
+		const bool bound = (a6 & 0xFFFFFFFF) != 0;
+
+		if (bound)
+		{
+			if (offset >= render->local_mem_size)
+			{
+				return CELL_EINVAL;
+			}
+
+			// Hardcoded values in gcm
+			verify(HERE), !!(a4 & (1ull << 32)), (a6 & 0xFFFFFFFF) == 0u + ((0x2000 << 0) | (0x20 << 16));
+		}
+
+		std::lock_guard lock(s_rsxmem_mtx);
+
 		auto &zcull = render->zculls[a3];
+
 		zcull.zFormat = ((a4 >> 32) >> 4) & 0xF;
 		zcull.aaFormat = ((a4 >> 32) >> 8) & 0xF;
 		zcull.width = ((a4 & 0xFFFFFFFF) >> 22) << 6;
 		zcull.height = (((a4 & 0xFFFFFFFF) >> 6) & 0xFF) << 6;
 		zcull.cullStart = (a5 >> 32);
-		zcull.offset = (a5 & 0xFFFFFFFF);
+		zcull.offset = offset;
 		zcull.zcullDir = ((a6 >> 32) >> 1) & 0x1;
 		zcull.zcullFormat = ((a6 >> 32) >> 2) & 0x3FF;
 		zcull.sFunc = ((a6 >> 32) >> 12) & 0xF;
 		zcull.sRef = ((a6 >> 32) >> 16) & 0xFF;
 		zcull.sMask = ((a6 >> 32) >> 24) & 0xFF;
-		zcull.binded = (a6 & 0xFFFFFFFF) != 0;
+		zcull.bound = bound;
 	}
 	break;
 
@@ -536,6 +695,7 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		break;
 
 	case 0xFEC: // hack: flip event notification
+
 		// we only ever use head 1 for now
 		driverInfo.head[1].flipFlags |= 0x80000000;
 		driverInfo.head[1].lastFlipTime = rsxTimeStamp(); // should rsxthread set this?
@@ -544,30 +704,42 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		// seems gcmSysWaitLabel uses this offset, so lets set it to 0 every flip
 		vm::_ref<u32>(render->label_addr + 0x10) = 0;
 
-		//if (a3 == 0)
-		//	sys_event_port_send(rsx_cfg->rsx_event_port, 0, (1 << 3), 0);
-		//if (a3 == 1)
-		sys_event_port_send(rsx_cfg->rsx_event_port, 0, (1 << 4), 0);
+		rsx_cfg->send_event(0, SYS_RSX_EVENT_FLIP_BASE << 1, 0);
 		break;
 
 	case 0xFED: // hack: vblank command
+	{
+		// NOTE: There currently seem to only be 2 active heads on PS3
+		verify(HERE), a3 < 2;
+
 		// todo: this is wrong and should be 'second' vblank handler and freq, but since currently everything is reported as being 59.94, this should be fine
 		vm::_ref<u32>(render->device_addr + 0x30) = 1;
+
+		const u64 current_time = rsxTimeStamp();
+
+		driverInfo.head[a3].lastSecondVTime = current_time;
+
+		// Note: not atomic
+		driverInfo.head[a3].lastVTimeLow = static_cast<u32>(current_time);
+		driverInfo.head[a3].lastVTimeHigh = static_cast<u32>(current_time >> 32);
+
 		driverInfo.head[a3].vBlankCount++;
-		driverInfo.head[a3].lastSecondVTime = rsxTimeStamp();
-		sys_event_port_send(rsx_cfg->rsx_event_port, 0, (1 << 1), 0);
+
+		u64 event_flags = SYS_RSX_EVENT_VBLANK;
 
 		if (render->enable_second_vhandler)
-			sys_event_port_send(rsx_cfg->rsx_event_port, 0, (1 << 11), 0); // second vhandler
+			event_flags |= SYS_RSX_EVENT_SECOND_VBLANK_BASE << a3; // second vhandler
 
+		rsx_cfg->send_event(0, event_flags, 0);
 		break;
+	}
 
 	case 0xFEF: // hack: user command
 		// 'custom' invalid package id for now
 		// as i think we need custom lv1 interrupts to handle this accurately
 		// this also should probly be set by rsxthread
 		driverInfo.userCmdParam = static_cast<u32>(a4);
-		sys_event_port_send(rsx_cfg->rsx_event_port, 0, (1 << 7), 0);
+		rsx_cfg->send_event(0, SYS_RSX_EVENT_USER_CMD, 0);
 		break;
 
 	default:
