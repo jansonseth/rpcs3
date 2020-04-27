@@ -175,12 +175,14 @@ void main_window::Init()
 	// Fix possible hidden game list columns. The game list has to be visible already. Use this after show()
 	m_game_list_frame->FixNarrowColumns();
 
+/*
 #if defined(_WIN32) || defined(__linux__)
 	if (m_gui_settings->GetValue(gui::m_check_upd_start).toBool())
 	{
 		m_updater.check_for_updates(true, this);
 	}
 #endif
+*/
 }
 
 QString main_window::GetCurrentTitle()
@@ -1662,6 +1664,7 @@ void main_window::CreateConnects()
 		}
 	});
 
+	/*
 	connect(ui->updateAct, &QAction::triggered, [this]()
 	{
 #if !defined(_WIN32) && !defined(__linux__)
@@ -1675,6 +1678,7 @@ void main_window::CreateConnects()
 		}
 		m_updater.check_for_updates(false, this);
 	});
+	*/
 
 	connect(ui->aboutAct, &QAction::triggered, [this]
 	{
