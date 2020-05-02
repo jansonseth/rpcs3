@@ -179,3 +179,11 @@ enum np_psn_status
 	disabled,
 	fake,
 };
+
+enum class shader_mode
+{
+	recompiler,
+	async_recompiler,
+	async_with_interpreter,
+	interpreter_only
+};

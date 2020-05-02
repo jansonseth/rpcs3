@@ -48,7 +48,7 @@ enum
 	SYS_SPU_THREAD_GROUP_LOG_GET_STATUS = 0x2,
 };
 
-enum : u32
+enum spu_group_status : u32
 {
 	SPU_THREAD_GROUP_STATUS_NOT_INITIALIZED,
 	SPU_THREAD_GROUP_STATUS_INITIALIZED,
@@ -263,13 +263,14 @@ struct lv2_spu_group
 
 	atomic_t<u32> init; // Initialization Counter
 	atomic_t<s32> prio; // SPU Thread Group Priority
-	atomic_t<u32> run_state; // SPU Thread Group State
+	atomic_t<spu_group_status> run_state; // SPU Thread Group State
 	atomic_t<s32> exit_status; // SPU Thread Group Exit Status
 	atomic_t<u32> join_state; // flags used to detect exit cause and signal
 	atomic_t<u32> running; // Number of running threads
 	cond_variable cond; // used to signal waiting PPU thread
 	atomic_t<u64> stop_count;
 	class ppu_thread* waiter = nullptr;
+	bool set_terminate = false;
 
 	std::array<std::shared_ptr<named_thread<spu_thread>>, 8> threads; // SPU Threads
 	std::array<s8, 256> threads_map; // SPU Threads map based number
@@ -380,3 +381,15 @@ error_code sys_raw_spu_read_puint_mb(ppu_thread&, u32 id, vm::ptr<u32> value);
 error_code sys_raw_spu_set_spu_cfg(ppu_thread&, u32 id, u32 value);
 error_code sys_raw_spu_get_spu_cfg(ppu_thread&, u32 id, vm::ptr<u32> value);
 error_code sys_raw_spu_recover_page_fault(ppu_thread&, u32 id);
+
+error_code sys_isolated_spu_create(ppu_thread&, vm::ptr<u32> id, vm::ptr<void> image, u64 arg1, u64 arg2, u64 arg3, u64 arg4);
+error_code sys_isolated_spu_start(ppu_thread&, u32 id);
+error_code sys_isolated_spu_destroy(ppu_thread& ppu, u32 id);
+error_code sys_isolated_spu_create_interrupt_tag(ppu_thread&, u32 id, u32 class_id, u32 hwthread, vm::ptr<u32> intrtag);
+error_code sys_isolated_spu_set_int_mask(ppu_thread&, u32 id, u32 class_id, u64 mask);
+error_code sys_isolated_spu_get_int_mask(ppu_thread&, u32 id, u32 class_id, vm::ptr<u64> mask);
+error_code sys_isolated_spu_set_int_stat(ppu_thread&, u32 id, u32 class_id, u64 stat);
+error_code sys_isolated_spu_get_int_stat(ppu_thread&, u32 id, u32 class_id, vm::ptr<u64> stat);
+error_code sys_isolated_spu_read_puint_mb(ppu_thread&, u32 id, vm::ptr<u32> value);
+error_code sys_isolated_spu_set_spu_cfg(ppu_thread&, u32 id, u32 value);
+error_code sys_isolated_spu_get_spu_cfg(ppu_thread&, u32 id, vm::ptr<u32> value);

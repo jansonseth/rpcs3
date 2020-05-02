@@ -277,6 +277,8 @@ error_code sys_ppu_thread_get_priority(u32 thread_id, vm::ptr<s32> priop)
 	// Clean some detached thread (hack)
 	g_fxo->get<ppu_thread_cleaner>()->clean(0);
 
+	u32 prio;
+
 	const auto thread = idm::check<named_thread<ppu_thread>>(thread_id, [&](ppu_thread& thread)
 	{
 		if (thread.joiner == ppu_join_status::exited)
@@ -284,7 +286,7 @@ error_code sys_ppu_thread_get_priority(u32 thread_id, vm::ptr<s32> priop)
 			return false;
 		}
 
-		*priop = thread.prio;
+		prio = thread.prio;
 		return true;
 	});
 
@@ -293,6 +295,7 @@ error_code sys_ppu_thread_get_priority(u32 thread_id, vm::ptr<s32> priop)
 		return CELL_ESRCH;
 	}
 
+	*priop = prio;
 	return CELL_OK;
 }
 
@@ -438,26 +441,37 @@ error_code sys_ppu_thread_start(ppu_thread& ppu, u32 thread_id)
 {
 	sys_ppu_thread.trace("sys_ppu_thread_start(thread_id=0x%x)", thread_id);
 
-	const auto thread = idm::get<named_thread<ppu_thread>>(thread_id, [&](ppu_thread& thread)
+	const auto thread = idm::get<named_thread<ppu_thread>>(thread_id, [&](ppu_thread& thread) -> CellError
 	{
 		if (thread.joiner == ppu_join_status::exited)
 		{
-			return false;
+			return CELL_ESRCH;
+		}
+
+		if (!thread.state.test_and_reset(cpu_flag::stop))
+		{
+			// Already started
+			return CELL_EBUSY;
 		}
 
 		lv2_obj::awake(&thread);
-		return true;
+
+		thread.cmd_list
+		({
+			{ppu_cmd::opd_call, 0}, thread.entry_func
+		});
+
+		return {};
 	});
 
-	if (!thread || !thread.ret)
+	if (!thread)
 	{
 		return CELL_ESRCH;
 	}
 
-	if (!thread->state.test_and_reset(cpu_flag::stop))
+	if (thread.ret)
 	{
-		// TODO: what happens there?
-		return CELL_EPERM;
+		return thread.ret;
 	}
 	else
 	{

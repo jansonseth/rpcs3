@@ -103,7 +103,8 @@ public:
 		const QString resize_on_boot               = tr("Automatically resizes the game window on boot.\nThis does not change the internal game resolution.");
 		const QString show_trophy_popups           = tr("Show trophy pop-ups when a trophy is unlocked.");
 		const QString disable_mouse                = tr("Disables the activation of fullscreen mode per double-click while the game screen is active.\nCheck this if you want to play with mouse and keyboard (for example with UCR).");
-		const QString max_llvm_threads             = tr("Limits the maximum number of threads used for PPU Module compilation.\nLower this in order to increase performance of other open applications.\nThe default uses all available threads.");
+		const QString max_llvm_threads             = tr("Limits the maximum number of threads used for the initial PPU and SPU module compilation.\nLower this in order to increase performance of other open applications.\nThe default uses all available threads.");
+		const QString show_mouse_in_fullscreen     = tr("Shows the mouse cursor when the fullscreen mode is active.\nCurrently this may not work every time.");
 		const QString show_shader_compilation_hint = tr("Show shader compilation hints using the native overlay.");
 		const QString use_native_interface         = tr("Enables use of native HUD within the game window that can interact with game controllers.\nWhen disabled, regular Qt dialogs are used instead.\nCurrently, the on-screen keyboard only supports the English key layout.");
 
@@ -139,9 +140,13 @@ public:
 		const QString vsync                      = tr("By having this off you might obtain a higher frame rate at the cost of tearing artifacts in the game.");
 		const QString strict_rendering_mode      = tr("Enforces strict compliance to the API specification.\nMight result in degraded performance in some games.\nCan resolve rare cases of missing graphics and flickering.\nIf unsure, don't use this option.");
 		const QString disable_vertex_cache       = tr("Disables the vertex cache.\nMight resolve missing or flickering graphics output.\nMay degrade performance.");
-		const QString disable_async_shaders      = tr("Disables asynchronous shader compilation.\nFixes missing graphics while shaders are compiling but introduces stuttering.\nDisable if you do not want to deal with graphics pop-in, or for testing before filing any bug reports.");
 		const QString stretch_to_display_area    = tr("Overrides the aspect ratio and stretches the image to the full display area.");
 		const QString multithreaded_rsx          = tr("Offloads some RSX operations to a secondary thread.\nMay improve performance for some high-core processors.\nMay cause slowdown in some situations due to the extra worker thread load.");
+
+		const QString legacy_shader_recompiler        = tr("Disables asynchronous shader compilation.\nFixes missing graphics while shaders are compiling but introduces severe stuttering or lag.\nUse this if you do not want to deal with graphics pop-in, or for testing before filing any bug reports.");
+		const QString async_shader_recompiler         = tr("This is the recommended option.\nIf a shader is not found in the cache, nothing will be rendered for this shader until it has compiled.\nYou may experience graphics pop-in.");
+		const QString async_with_shader_interpreter   = tr("Hybrid rendering mode.\nIf a shader is not found in the cache, the interpreter will be used to render approximated graphics for this shader until it has compiled.");
+		const QString shader_interpreter_only         = tr("All rendering is handled by the interpreter with no attempt to compile native shaders.\nThis mode is very slow and experimental.");
 
 		// gui
 

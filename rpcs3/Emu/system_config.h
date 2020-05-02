@@ -101,6 +101,7 @@ struct cfg_root : cfg::node
 		cfg::_enum<video_aspect> aspect_ratio{ this, "Aspect ratio", video_aspect::_16_9 };
 		cfg::_enum<frame_limit_type> frame_limit{ this, "Frame limit", frame_limit_type::none, true };
 		cfg::_enum<msaa_level> antialiasing_level{ this, "MSAA", msaa_level::_auto };
+		cfg::_enum<shader_mode> shadermode{ this, "Shader Mode", shader_mode::async_recompiler };
 
 		cfg::_bool write_color_buffers{ this, "Write Color Buffers" };
 		cfg::_bool write_depth_buffer{ this, "Write Depth Buffer" };
@@ -123,7 +124,6 @@ struct cfg_root : cfg::node
 		cfg::_bool disable_on_disk_shader_cache{ this, "Disable On-Disk Shader Cache", false };
 		cfg::_bool disable_vulkan_mem_allocator{ this, "Disable Vulkan Memory Allocator", false };
 		cfg::_bool full_rgb_range_output{ this, "Use full RGB output range", true, true }; // Video out dynamic range
-		cfg::_bool disable_asynchronous_shader_compiler{ this, "Disable Asynchronous Shader Compiler", false };
 		cfg::_bool strict_texture_flushing{ this, "Strict Texture Flushing", false };
 		cfg::_bool disable_native_float16{ this, "Disable native float16 support", false };
 		cfg::_bool multithreaded_rsx{ this, "Multithreaded RSX", false };
@@ -213,7 +213,7 @@ struct cfg_root : cfg::node
 		cfg::_int<1, 128> startt{ this, "Start Threshold", 1 }; // TODO: used only by ALSA, should probably be removed once ALSA is upgraded
 		cfg::_int<0, 200> volume{ this, "Master Volume", 100 };
 		cfg::_bool enable_buffering{ this, "Enable Buffering", true };
-		cfg::_int <20, 250> desired_buffer_duration{ this, "Desired Audio Buffer Duration", 100 };
+		cfg::_int <4, 250> desired_buffer_duration{ this, "Desired Audio Buffer Duration", 100 };
 		cfg::_int<1, 1000> sampling_period_multiplier{ this, "Sampling Period Multiplier", 100 };
 		cfg::_bool enable_time_stretching{ this, "Enable Time Stretching", false };
 		cfg::_int<0, 100> time_stretching_threshold{ this, "Time Stretching Threshold", 75 };

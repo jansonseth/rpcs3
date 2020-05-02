@@ -2154,7 +2154,7 @@ void thread_ctrl::detect_cpu_layout()
 	if (!g_native_core_layout.compare_and_swap_test(native_core_arrangement::undefined, native_core_arrangement::generic))
 		return;
 
-	const auto system_id = utils::get_system_info();
+	const auto system_id = utils::get_cpu_brand();
 	if (system_id.find("Ryzen") != umax)
 	{
 		g_native_core_layout.store(native_core_arrangement::amd_ccx);
@@ -2226,7 +2226,7 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 		case native_core_arrangement::amd_ccx:
 		{
 			u64 spu_mask, ppu_mask, rsx_mask;
-			const auto system_id = utils::get_system_info();
+			const auto system_id = utils::get_cpu_brand();
 			if (thread_count >= 32)
 			{
 				if (system_id.find("3950X") != umax)
@@ -2399,6 +2399,30 @@ void thread_ctrl::set_native_priority(int priority)
 #endif
 }
 
+u64 thread_ctrl::get_process_affinity_mask()
+{
+	static const u64 mask = []() -> u64
+	{
+#ifdef _WIN32
+		DWORD_PTR res, _sys;
+		if (!GetProcessAffinityMask(GetCurrentProcess(), &res, &_sys))
+		{
+			sig_log.error("Failed to get process affinity mask.");
+			return 0;
+		}
+
+		return res;
+#else
+		// Assume it's called from the main thread (this is a bit shaky)
+		return thread_ctrl::get_thread_affinity_mask();
+#endif
+	}();
+
+	return mask;
+}
+
+DECLARE(thread_ctrl::process_affinity_mask) = get_process_affinity_mask();
+
 void thread_ctrl::set_thread_affinity_mask(u64 mask)
 {
 #ifdef _WIN32
@@ -2431,6 +2455,61 @@ void thread_ctrl::set_thread_affinity_mask(u64 mask)
 		}
 	}
 
-	pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cs);
+	if (int err = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cs))
+	{
+		sig_log.error("Failed to set thread affinity 0x%x: error %d.", mask, err);
+	}
+#endif
+}
+
+u64 thread_ctrl::get_thread_affinity_mask()
+{
+#ifdef _WIN32
+	const u64 res = get_process_affinity_mask();
+
+	if (DWORD_PTR result = SetThreadAffinityMask(GetCurrentThread(), res))
+	{
+		if (res != result)
+		{
+			SetThreadAffinityMask(GetCurrentThread(), result);
+		}
+
+		return result;
+	}
+
+	sig_log.error("Failed to get thread affinity mask.");
+	return 0;
+#elif defined(__linux__) || defined(__DragonFly__) || defined(__FreeBSD__)
+	cpu_set_t cs;
+	CPU_ZERO(&cs);
+
+	if (int err = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cs))
+	{
+		sig_log.error("Failed to get thread affinity mask: error %d.", err);
+		return 0;
+	}
+
+	u64 result;
+
+	for (u32 core = 0; core < 64u; core++)
+	{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+		if (CPU_ISSET(core, &cs))
+#pragma GCC diagnostic pop
+		{
+			result |= 1ull << core;
+		}
+	}
+
+	if (result == 0)
+	{
+		sig_log.error("Thread affinity mask is out of u64 range.");
+		return 0;
+	}
+
+	return result;
+#else
+	return -1;
 #endif
 }

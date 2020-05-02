@@ -617,7 +617,8 @@ bool Emulator::InstallPkg(const std::string& path)
 	// Run PKG unpacking asynchronously
 	named_thread worker("PKG Installer", [&]
 	{
-		return pkg_install(path, progress);
+		package_reader reader(path);
+		return reader.extract_data(progress);
 	});
 
 	{
@@ -654,6 +655,11 @@ std::string Emulator::GetHddDir()
 std::string Emulator::GetHdd1Dir()
 {
 	return fmt::replace_all(g_cfg.vfs.dev_hdd1, "$(EmulatorDir)", GetEmuDir());
+}
+
+std::string Emulator::GetCacheDir()
+{
+	return fs::get_cache_dir() + "cache/";
 }
 
 #ifdef _WIN32
@@ -1430,7 +1436,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool add_only, bool
 
 			ppu_load_exec(ppu_exec);
 
-			_main->cache = fs::get_cache_dir() + "cache/";
+			_main->cache = GetCacheDir();
 
 			if (!m_title_id.empty() && m_cat != "1P")
 			{

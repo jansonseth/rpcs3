@@ -28,12 +28,14 @@ class GSRender;
 
 #define CMD_DEBUG 0
 
-std::atomic<bool> user_asked_for_frame_capture = false;
+std::atomic<bool> g_user_asked_for_frame_capture = false;
 rsx::frame_trace_data frame_debug;
 rsx::frame_capture_data frame_capture;
 
 extern CellGcmOffsetTable offsetTable;
 extern thread_local std::string(*g_tls_log_prefix)();
+extern u64 sys_time_get_timebase_frequency();
+extern u64 get_timebased_time();
 
 namespace rsx
 {
@@ -309,7 +311,7 @@ namespace rsx
 
 		m_graphics_state = pipeline_state::all_dirty;
 
-		user_asked_for_frame_capture = false;
+		g_user_asked_for_frame_capture = false;
 
 		if (g_cfg.misc.use_native_interface && (g_cfg.video.renderer == video_renderer::opengl || g_cfg.video.renderer == video_renderer::vulkan))
 		{
@@ -559,7 +561,9 @@ namespace rsx
 
 		g_fxo->init<named_thread>("RSX Decompiler Thread", [this]
 		{
-			if (g_cfg.video.disable_asynchronous_shader_compiler)
+			const auto shadermode = g_cfg.video.shadermode.get();
+
+			if (shadermode != shader_mode::async_recompiler && shadermode != shader_mode::async_with_interpreter)
 			{
 				// Die
 				return;
@@ -811,8 +815,15 @@ namespace rsx
 
 	u64 thread::timestamp()
 	{
-		// Get timestamp, and convert it from microseconds to nanoseconds
-		const u64 t = get_guest_system_time() * 1000;
+		const u64 freq = sys_time_get_timebase_frequency();
+
+		auto get_time_ns = [freq]()
+		{
+			const u64 t = get_timebased_time();
+			return (t / freq * 1'000'000'000 + t % freq * 1'000'000'000 / freq);
+		};
+
+		const u64 t = get_time_ns();
 		if (t != timestamp_ctrl)
 		{
 			timestamp_ctrl = t;
@@ -820,7 +831,23 @@ namespace rsx
 			return t;
 		}
 
-		timestamp_subvalue += 10;
+		// Check if we passed the limit of what fixed increments is legal for
+		// Wait for the next time value reported if we passed the limit
+		if ((1'000'000'000 / freq) - timestamp_subvalue <= 2)
+		{
+			u64 now = get_time_ns();
+
+			for (; t == now; now = get_time_ns())
+			{
+				_mm_pause();
+			}
+
+			timestamp_ctrl = now;
+			timestamp_subvalue = 0;
+			return now;
+		}
+
+		timestamp_subvalue += 2;
 		return t + timestamp_subvalue;
 	}
 
@@ -2137,7 +2164,9 @@ namespace rsx
 				//Find zeta address in bound zculls
 				for (const auto& zcull : zculls)
 				{
-					if (zcull.bound)
+					if (zcull.bound &&
+						rsx::to_surface_depth_format(zcull.zFormat) == m_depth_surface_info.depth_format &&
+						rsx::to_surface_antialiasing(zcull.aaFormat) == rsx::method_registers.surface_antialias())
 					{
 						const u32 rsx_address = rsx::get_address(zcull.offset, CELL_GCM_LOCATION_LOCAL, HERE);
 						if (rsx_address == zeta_address)
@@ -2265,7 +2294,7 @@ namespace rsx
 
 	bool thread::is_fifo_idle() const
 	{
-		return ctrl->get == (ctrl->put & ~3);
+		return ctrl == nullptr || ctrl->get == (ctrl->put & ~3);
 	}
 
 	void thread::flush_fifo()
@@ -2556,7 +2585,7 @@ namespace rsx
 	void thread::on_frame_end(u32 buffer, bool forced)
 	{
 		// Marks the end of a frame scope GPU-side
-		if (user_asked_for_frame_capture.exchange(false) && !capture_current_frame)
+		if (g_user_asked_for_frame_capture.exchange(false) && !capture_current_frame)
 		{
 			capture_current_frame = true;
 			frame_debug.reset();

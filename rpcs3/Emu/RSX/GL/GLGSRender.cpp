@@ -69,7 +69,9 @@ void GLGSRender::on_init_thread()
 	// This allows context sharing to work (both GLRCs passed to wglShareLists have to be idle or you get ERROR_BUSY)
 	m_context = m_frame->make_context();
 
-	if (!g_cfg.video.disable_asynchronous_shader_compiler)
+	const auto shadermode = g_cfg.video.shadermode.get();
+
+	if (shadermode == shader_mode::async_recompiler || shadermode == shader_mode::async_with_interpreter)
 	{
 		m_decompiler_context = m_frame->make_context();
 	}
@@ -196,6 +198,8 @@ void GLGSRender::on_init_thread()
 		m_texture_parameters_buffer = std::make_unique<gl::legacy_ring_buffer>();
 		m_vertex_layout_buffer = std::make_unique<gl::legacy_ring_buffer>();
 		m_index_ring_buffer = std::make_unique<gl::legacy_ring_buffer>();
+		m_vertex_instructions_buffer = std::make_unique<gl::legacy_ring_buffer>();
+		m_fragment_instructions_buffer = std::make_unique<gl::legacy_ring_buffer>();
 	}
 	else
 	{
@@ -207,6 +211,8 @@ void GLGSRender::on_init_thread()
 		m_texture_parameters_buffer = std::make_unique<gl::ring_buffer>();
 		m_vertex_layout_buffer = std::make_unique<gl::ring_buffer>();
 		m_index_ring_buffer = std::make_unique<gl::ring_buffer>();
+		m_vertex_instructions_buffer = std::make_unique<gl::ring_buffer>();
+		m_fragment_instructions_buffer = std::make_unique<gl::ring_buffer>();
 	}
 
 	m_attrib_ring_buffer->create(gl::buffer::target::texture, 256 * 0x100000);
@@ -217,6 +223,14 @@ void GLGSRender::on_init_thread()
 	m_vertex_env_buffer->create(gl::buffer::target::uniform, 16 * 0x100000);
 	m_texture_parameters_buffer->create(gl::buffer::target::uniform, 16 * 0x100000);
 	m_vertex_layout_buffer->create(gl::buffer::target::uniform, 16 * 0x100000);
+
+	if (shadermode == shader_mode::async_with_interpreter || shadermode == shader_mode::interpreter_only)
+	{
+		m_vertex_instructions_buffer->create(gl::buffer::target::ssbo, 16 * 0x100000);
+		m_fragment_instructions_buffer->create(gl::buffer::target::ssbo, 16 * 0x100000);
+
+		m_shader_interpreter.create();
+	}
 
 	if (gl_caps.vendor_AMD)
 	{
@@ -427,12 +441,24 @@ void GLGSRender::on_exit()
 		m_identity_index_buffer->remove();
 	}
 
+	if (m_vertex_instructions_buffer)
+	{
+		m_vertex_instructions_buffer->remove();
+	}
+
+	if (m_fragment_instructions_buffer)
+	{
+		m_fragment_instructions_buffer->remove();
+	}
+
 	m_null_textures.clear();
 	m_text_printer.close();
 	m_gl_texture_cache.destroy();
 	m_depth_converter.destroy();
 	m_ui_renderer.destroy();
 	m_video_output_pass.destroy();
+
+	m_shader_interpreter.destroy();
 
 	for (u32 i = 0; i < occlusion_query_count; ++i)
 	{
@@ -586,7 +612,9 @@ void GLGSRender::clear_surface(u32 arg)
 
 bool GLGSRender::load_program()
 {
-	if (m_graphics_state & rsx::pipeline_state::invalidate_pipeline_bits)
+	const auto shadermode = g_cfg.video.shadermode.get();
+
+	if ((m_interpreter_state = (m_graphics_state & rsx::pipeline_state::invalidate_pipeline_bits)))
 	{
 		get_current_fragment_program(fs_sampler_state);
 		verify(HERE), current_fragment_program.valid;
@@ -598,38 +626,65 @@ bool GLGSRender::load_program()
 	}
 	else if (m_program)
 	{
-		// Program already loaded
-		return true;
+		if (!m_shader_interpreter.is_interpreter(m_program)) [[likely]]
+		{
+			return true;
+		}
+
+		if (shadermode == shader_mode::interpreter_only)
+		{
+			m_program = m_shader_interpreter.get(current_fp_metadata);
+			return true;
+		}
 	}
 
-	void* pipeline_properties = nullptr;
-	m_program = m_prog_buffer.get_graphics_pipeline(current_vertex_program, current_fragment_program, pipeline_properties,
-			!g_cfg.video.disable_asynchronous_shader_compiler, true).get();
-
-	if (m_prog_buffer.check_cache_missed())
+	const bool was_interpreter = m_shader_interpreter.is_interpreter(m_program);
+	if (shadermode != shader_mode::interpreter_only) [[likely]]
 	{
-		// Notify the user with HUD notification
-		if (g_cfg.misc.show_shader_compilation_hint)
+		void* pipeline_properties = nullptr;
+		m_program = m_prog_buffer.get_graphics_pipeline(current_vertex_program, current_fragment_program, pipeline_properties,
+			shadermode != shader_mode::recompiler, true).get();
+
+		if (m_prog_buffer.check_cache_missed())
 		{
-			if (m_overlay_manager)
+			// Notify the user with HUD notification
+			if (g_cfg.misc.show_shader_compilation_hint)
 			{
-				if (auto dlg = m_overlay_manager->get<rsx::overlays::shader_compile_notification>())
+				if (m_overlay_manager)
 				{
-					// Extend duration
-					dlg->touch();
-				}
-				else
-				{
-					// Create dialog but do not show immediately
-					m_overlay_manager->create<rsx::overlays::shader_compile_notification>();
+					if (auto dlg = m_overlay_manager->get<rsx::overlays::shader_compile_notification>())
+					{
+						// Extend duration
+						dlg->touch();
+					}
+					else
+					{
+						// Create dialog but do not show immediately
+						m_overlay_manager->create<rsx::overlays::shader_compile_notification>();
+					}
 				}
 			}
+		}
+		else
+		{
+			verify(HERE), m_program;
+			m_program->sync();
 		}
 	}
 	else
 	{
-		verify(HERE), m_program;
-		m_program->sync();
+		m_program = nullptr;
+	}
+
+	if (!m_program && (shadermode == shader_mode::async_with_interpreter || shadermode == shader_mode::interpreter_only))
+	{
+		// Fall back to interpreter
+		m_program = m_shader_interpreter.get(current_fp_metadata);
+		if (was_interpreter != m_shader_interpreter.is_interpreter(m_program))
+		{
+			// Program has changed, reupload
+			m_interpreter_state = rsx::invalidate_pipeline_bits;
+		}
 	}
 
 	return m_program != nullptr;
@@ -649,6 +704,7 @@ void GLGSRender::load_program_env()
 	const bool update_vertex_env = !!(m_graphics_state & rsx::pipeline_state::vertex_state_dirty);
 	const bool update_fragment_env = !!(m_graphics_state & rsx::pipeline_state::fragment_state_dirty);
 	const bool update_fragment_texture_env = !!(m_graphics_state & rsx::pipeline_state::fragment_texture_state_dirty);
+	const bool update_instruction_buffers = (!!m_interpreter_state && m_shader_interpreter.is_interpreter(m_program));
 
 	m_program->use();
 
@@ -659,6 +715,12 @@ void GLGSRender::load_program_env()
 		if (update_fragment_texture_env) m_texture_parameters_buffer->reserve_storage_on_heap(256);
 		if (update_fragment_constants) m_fragment_constants_buffer->reserve_storage_on_heap(align(fragment_constants_size, 256));
 		if (update_transform_constants) m_transform_constants_buffer->reserve_storage_on_heap(8192);
+
+		if (update_instruction_buffers)
+		{
+			m_vertex_instructions_buffer->reserve_storage_on_heap(513 * 16);
+			m_fragment_instructions_buffer->reserve_storage_on_heap(current_fp_metadata.program_ucode_length);
+		}
 	}
 
 	if (update_vertex_env)
@@ -686,7 +748,7 @@ void GLGSRender::load_program_env()
 		m_transform_constants_buffer->bind_range(GL_VERTEX_CONSTANT_BUFFERS_BIND_SLOT, mapping.second, 8192);
 	}
 
-	if (update_fragment_constants)
+	if (update_fragment_constants && !update_instruction_buffers)
 	{
 		// Fragment constants
 		auto mapping = m_fragment_constants_buffer->alloc_from_heap(fragment_constants_size, m_uniform_buffer_offset_align);
@@ -718,6 +780,50 @@ void GLGSRender::load_program_env()
 		m_texture_parameters_buffer->bind_range(GL_FRAGMENT_TEXTURE_PARAMS_BIND_SLOT, mapping.second, 256);
 	}
 
+	if (update_instruction_buffers)
+	{
+		if (m_interpreter_state & rsx::vertex_program_dirty)
+		{
+			// Attach vertex buffer data
+			const auto vp_block_length = current_vp_metadata.ucode_length + 16;
+			auto vp_mapping = m_vertex_instructions_buffer->alloc_from_heap(vp_block_length, 16);
+			auto vp_buf = static_cast<u8*>(vp_mapping.first);
+
+			auto vp_config = reinterpret_cast<u32*>(vp_buf);
+			vp_config[0] = current_vertex_program.base_address;
+			vp_config[1] = current_vertex_program.entry;
+			vp_config[2] = current_vertex_program.output_mask;
+			vp_config[3] = rsx::method_registers.two_side_light_en() ? 1u : 0u;
+
+			std::memcpy(vp_buf + 16, current_vertex_program.data.data(), current_vp_metadata.ucode_length);
+
+			m_vertex_instructions_buffer->bind_range(GL_INTERPRETER_VERTEX_BLOCK, vp_mapping.second, vp_block_length);
+			m_vertex_instructions_buffer->notify();
+		}
+
+		if (m_interpreter_state & rsx::fragment_program_dirty)
+		{
+			// Attach fragment buffer data
+			const auto fp_block_length = current_fp_metadata.program_ucode_length + 80;
+			auto fp_mapping = m_fragment_instructions_buffer->alloc_from_heap(fp_block_length, 16);
+			auto fp_buf = static_cast<u8*>(fp_mapping.first);
+
+			// Control mask
+			const auto control_masks = reinterpret_cast<u32*>(fp_buf);
+			control_masks[0] = rsx::method_registers.shader_control();
+			control_masks[1] = current_fragment_program.texture_dimensions;
+
+			// Bind textures
+			m_shader_interpreter.update_fragment_textures(fs_sampler_state, current_fp_metadata.referenced_textures_mask, reinterpret_cast<u32*>(fp_buf + 16));
+
+			const auto fp_data = static_cast<u8*>(current_fragment_program.addr) + current_fp_metadata.program_start_offset;
+			std::memcpy(fp_buf + 80, fp_data, current_fp_metadata.program_ucode_length);
+
+			m_fragment_instructions_buffer->bind_range(GL_INTERPRETER_FRAGMENT_BLOCK, fp_mapping.second, fp_block_length);
+			m_fragment_instructions_buffer->notify();
+		}
+	}
+
 	if (manually_flush_ring_buffers)
 	{
 		if (update_fragment_env) m_fragment_env_buffer->unmap();
@@ -725,6 +831,12 @@ void GLGSRender::load_program_env()
 		if (update_fragment_texture_env) m_texture_parameters_buffer->unmap();
 		if (update_fragment_constants) m_fragment_constants_buffer->unmap();
 		if (update_transform_constants) m_transform_constants_buffer->unmap();
+
+		if (update_instruction_buffers)
+		{
+			m_vertex_instructions_buffer->unmap();
+			m_fragment_instructions_buffer->unmap();
+		}
 	}
 
 	const u32 handled_flags = (rsx::pipeline_state::fragment_state_dirty | rsx::pipeline_state::vertex_state_dirty | rsx::pipeline_state::transform_constants_dirty | rsx::pipeline_state::fragment_constants_dirty | rsx::pipeline_state::fragment_texture_state_dirty);

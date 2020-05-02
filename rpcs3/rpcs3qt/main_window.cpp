@@ -50,6 +50,8 @@
 
 LOG_CHANNEL(gui_log, "GUI");
 
+extern std::atomic<bool> g_user_asked_for_frame_capture;
+
 inline std::string sstr(const QString& _in) { return _in.toStdString(); }
 
 main_window::main_window(std::shared_ptr<gui_settings> gui_settings, std::shared_ptr<emu_settings> emu_settings, std::shared_ptr<persistent_settings> persistent_settings, QWidget *parent)
@@ -300,17 +302,9 @@ void main_window::show_boot_error(game_boot_result status)
 
 void main_window::Boot(const std::string& path, const std::string& title_id, bool direct, bool add_only, bool force_global_config)
 {
-	if (!Emu.IsStopped())
+	if (!m_gui_settings->GetBootConfirmation(this, gui::ib_confirm_boot))
 	{
-		int result = QMessageBox::Yes;
-		m_gui_settings->ShowConfirmationBox(tr("Close Running Game?"),
-			tr("Booting another game will close the current game.\nDo you really want to boot another game?\n\nAny unsaved progress will be lost!\n"),
-			gui::ib_confirm_boot, &result, this);
-
-		if (result != QMessageBox::Yes)
-		{
-			return;
-		}
+		return;
 	}
 
 	m_app_icon = gui::utils::get_app_icon_from_path(path, title_id);
@@ -427,6 +421,11 @@ void main_window::BootRsxCapture(std::string path)
 		path = sstr(file_path);
 	}
 
+	if (!m_gui_settings->GetBootConfirmation(this))
+	{
+		return;
+	}
+
 	Emu.SetForceBoot(true);
 	Emu.Stop();
 
@@ -479,11 +478,18 @@ void main_window::HandlePackageInstallation(QStringList file_paths)
 		return;
 	}
 
+	if (!m_gui_settings->GetBootConfirmation(this))
+	{
+		return;
+	}
+
 	progress_dialog pdlg(tr("RPCS3 Package Installer"), tr("Installing package, please wait..."), tr("Cancel"), 0, 1000, false, this);
 	pdlg.show();
 
 	// Synchronization variable
 	atomic_t<double> progress(0.);
+
+	package_error error = package_error::no_error;
 
 	bool cancelled = false;
 
@@ -506,9 +512,17 @@ void main_window::HandlePackageInstallation(QStringList file_paths)
 		m_gui_settings->SetValue(gui::fd_install_pkg, file_info.path());
 
 		// Run PKG unpacking asynchronously
-		named_thread worker("PKG Installer", [path, &progress]
+		named_thread worker("PKG Installer", [path, &progress, &error]
 		{
-			return pkg_install(path, progress);
+			package_reader reader(path);
+			error = reader.check_target_app_version();
+
+			if (error == package_error::no_error)
+			{
+				return reader.extract_data(progress);
+			}
+
+			return false;
 		});
 
 		// Wait for the completion
@@ -553,8 +567,16 @@ void main_window::HandlePackageInstallation(QStringList file_paths)
 		{
 			if (!cancelled)
 			{
-				gui_log.error("Failed to install %s.", file_name);
-				QMessageBox::critical(this, tr("Failure!"), tr("Failed to install software from package %1!").arg(file_path));
+				if (error == package_error::app_version)
+				{
+					gui_log.error("Cannot install %s.", file_name);
+					QMessageBox::warning(this, tr("Warning!"), tr("The following package cannot be installed on top of the current data:\n%1!").arg(file_path));
+				}
+				else
+				{
+					gui_log.error("Failed to install %s.", file_name);
+					QMessageBox::critical(this, tr("Failure!"), tr("Failed to install software from package:\n%1!").arg(file_path));
+				}
 			}
 			return;
 		}
@@ -597,6 +619,11 @@ void main_window::InstallPup(QString file_path)
 void main_window::HandlePupInstallation(QString file_path)
 {
 	if (file_path.isEmpty())
+	{
+		return;
+	}
+
+	if (!m_gui_settings->GetBootConfirmation(this))
 	{
 		return;
 	}
@@ -741,8 +768,7 @@ void main_window::HandlePupInstallation(QString file_path)
 		gui_log.success("Successfully installed PS3 firmware version %s.", version_string);
 		m_gui_settings->ShowInfoBox(tr("Success!"), tr("Successfully installed PS3 firmware and LLE Modules!"), gui::ib_pup_success, this);
 
-		Emu.SetForceBoot(true);
-		Emu.BootGame(g_cfg.vfs.get_dev_flash() + "sys/external/", "", true);
+		CreateFirmwareCache();
 	}
 }
 
@@ -755,6 +781,11 @@ void main_window::DecryptSPRXLibraries()
 	const QStringList modules = QFileDialog::getOpenFileNames(this, tr("Select binary files"), path_last_sprx, tr("All Binaries (*.BIN *.self *.sprx);;BIN files (*.BIN);;SELF files (*.self);;SPRX files (*.sprx);;All files (*.*)"));
 
 	if (modules.isEmpty())
+	{
+		return;
+	}
+	
+	if (!m_gui_settings->GetBootConfirmation(this))
 	{
 		return;
 	}
@@ -1077,6 +1108,7 @@ void main_window::EnableMenus(bool enabled)
 	ui->toolsmemory_viewerAct->setEnabled(enabled);
 	ui->toolsRsxDebuggerAct->setEnabled(enabled);
 	ui->toolsStringSearchAct->setEnabled(enabled);
+	ui->actionCreate_RSX_Capture->setEnabled(enabled);
 }
 
 void main_window::BootRecentAction(const QAction* act)
@@ -1348,6 +1380,10 @@ void main_window::CreateConnects()
 	connect(ui->bootElfAct, &QAction::triggered, this, &main_window::BootElf);
 	connect(ui->bootGameAct, &QAction::triggered, this, &main_window::BootGame);
 	connect(ui->actionopen_rsx_capture, &QAction::triggered, [this](){ BootRsxCapture(); });
+	connect(ui->actionCreate_RSX_Capture, &QAction::triggered, []()
+	{
+		g_user_asked_for_frame_capture = true;
+	});
 
 	connect(ui->addGamesAct, &QAction::triggered, [this]()
 	{
@@ -1411,6 +1447,9 @@ void main_window::CreateConnects()
 	connect(ui->batchRemoveCustomPadConfigurationsAct, &QAction::triggered, m_game_list_frame, &game_list_frame::BatchRemoveCustomPadConfigurations);
 
 	connect(ui->removeDiskCacheAct, &QAction::triggered, this, &main_window::RemoveDiskCache);
+
+	connect(ui->removeFirmwareCacheAct, &QAction::triggered, this, &main_window::RemoveFirmwareCache);
+	connect(ui->createFirmwareCacheAct, &QAction::triggered, this, &main_window::CreateFirmwareCache);
 
 	connect(ui->sysPauseAct, &QAction::triggered, this, &main_window::OnPlayOrPause);
 	connect(ui->sysStopAct, &QAction::triggered, [this]() { Emu.Stop(); });
@@ -1989,6 +2028,61 @@ void main_window::RemoveDiskCache()
 	}
 }
 
+void main_window::RemoveFirmwareCache()
+{
+	const std::string cache_dir = Emu.GetCacheDir();
+
+	if (!fs::is_dir(cache_dir))
+		return;
+
+	if (QMessageBox::question(this, tr("Confirm Removal"), tr("Remove firmware cache?")) != QMessageBox::Yes)
+		return;
+
+	u32 caches_removed = 0;
+	u32 caches_total = 0;
+
+	const QStringList filter{ QStringLiteral("ppu-*-lib*.sprx")};
+
+	QDirIterator dir_iter(qstr(cache_dir), filter, QDir::Dirs | QDir::NoDotAndDotDot);
+
+	while (dir_iter.hasNext())
+	{
+		const QString path = dir_iter.next();
+
+		if (QDir(path).removeRecursively())
+		{
+			++caches_removed;
+			gui_log.notice("Removed firmware cache: %s", sstr(path));
+		}
+		else
+		{
+			gui_log.warning("Could not remove firmware cache: %s", sstr(path));
+		}
+
+		++caches_total;
+	}
+
+	const bool success = caches_total == caches_removed;
+
+	if (success)
+		gui_log.success("Removed firmware cache in %s", cache_dir);
+	else
+		gui_log.fatal("Only %d/%d firmware caches could be removed in %s", caches_removed, caches_total, cache_dir);
+
+	return;
+}
+
+void main_window::CreateFirmwareCache()
+{
+	if (!m_gui_settings->GetBootConfirmation(this))
+	{
+		return;
+	}
+
+	Emu.SetForceBoot(true);
+	Emu.BootGame(g_cfg.vfs.get_dev_flash() + "sys/external/", "", true);
+}
+
 void main_window::keyPressEvent(QKeyEvent *keyEvent)
 {
 	if (((keyEvent->modifiers() & Qt::AltModifier) && keyEvent->key() == Qt::Key_Return) || (isFullScreen() && keyEvent->key() == Qt::Key_Escape))
@@ -2024,19 +2118,10 @@ void main_window::mouseDoubleClickEvent(QMouseEvent *event)
 */
 void main_window::closeEvent(QCloseEvent* closeEvent)
 {
-	if (!Emu.IsStopped() && m_gui_settings->GetValue(gui::ib_confirm_exit).toBool())
+	if (!m_gui_settings->GetBootConfirmation(this, gui::ib_confirm_exit))
 	{
-		int result = QMessageBox::Yes;
-
-		m_gui_settings->ShowConfirmationBox(tr("Exit RPCS3?"),
-			tr("A game is currently running. Do you really want to close RPCS3?\n\nAny unsaved progress will be lost!\n"),
-			gui::ib_confirm_exit, &result, nullptr);
-
-		if (result != QMessageBox::Yes)
-		{
-			closeEvent->ignore();
-			return;
-		}
+		closeEvent->ignore();
+		return;
 	}
 
 	// Cleanly stop the emulator.
@@ -2088,9 +2173,9 @@ Check data for valid file types and cache their paths if necessary
 @param savePaths = flag for path caching
 @returns validity of file type
 */
-int main_window::IsValidFile(const QMimeData& md, QStringList* drop_paths)
+main_window::drop_type main_window::IsValidFile(const QMimeData& md, QStringList* drop_paths)
 {
-	int drop_type = drop_type::drop_error;
+	auto drop_type = drop_type::drop_error;
 
 	const QList<QUrl> list = md.urls(); // get list of all the dropped file urls
 
@@ -2169,8 +2254,11 @@ void main_window::dropEvent(QDropEvent* event)
 	switch (IsValidFile(*event->mimeData(), &drop_paths)) // get valid file paths and drop type
 	{
 	case drop_type::drop_error:
+	{
 		break;
+	}
 	case drop_type::drop_pkg: // install the packages
+	{
 		if (drop_paths.count() > 1)
 		{
 			pkg_install_dialog dlg(drop_paths, this);
@@ -2189,10 +2277,14 @@ void main_window::dropEvent(QDropEvent* event)
 			InstallPackages(drop_paths, true);
 		}
 		break;
+	}
 	case drop_type::drop_pup: // install the firmware
+	{
 		InstallPup(drop_paths.first());
 		break;
+	}
 	case drop_type::drop_rap: // import rap files to exdata dir
+	{
 		for (const auto& rap : drop_paths)
 		{
 			const std::string rapname = sstr(QFileInfo(rap).fileName());
@@ -2210,14 +2302,26 @@ void main_window::dropEvent(QDropEvent* event)
 		// Refresh game list since we probably unlocked some games now.
 		m_game_list_frame->Refresh(true);
 		break;
+	}
 	case drop_type::drop_dir: // import valid games to gamelist (games.yaml)
+	{
+		if (!m_gui_settings->GetBootConfirmation(this))
+		{
+			return;
+		}
 		for (const auto& path : drop_paths)
 		{
 			AddGamesFromDir(path);
 		}
 		m_game_list_frame->Refresh(true);
 		break;
+	}
 	case drop_type::drop_game: // import valid games to gamelist (games.yaml)
+	{
+		if (!m_gui_settings->GetBootConfirmation(this))
+		{
+			return;
+		}
 		if (const auto error = Emu.BootGame(sstr(drop_paths.first()), "", true); error != game_boot_result::no_errors)
 		{
 			gui_log.error("Boot failed: reason: %s, path: %s", error, sstr(drop_paths.first()));
@@ -2229,18 +2333,23 @@ void main_window::dropEvent(QDropEvent* event)
 			m_game_list_frame->Refresh(true);
 		}
 		break;
+	}
 	case drop_type::drop_rrc: // replay a rsx capture file
+	{
 		BootRsxCapture(sstr(drop_paths.first()));
 		break;
+	}
 	default:
+	{
 		gui_log.warning("Invalid dropType in gamelist dropEvent");
 		break;
+	}
 	}
 }
 
 void main_window::dragEnterEvent(QDragEnterEvent* event)
 {
-	if (IsValidFile(*event->mimeData()))
+	if (IsValidFile(*event->mimeData()) != drop_type::drop_error)
 	{
 		event->accept();
 	}
@@ -2248,7 +2357,7 @@ void main_window::dragEnterEvent(QDragEnterEvent* event)
 
 void main_window::dragMoveEvent(QDragMoveEvent* event)
 {
-	if (IsValidFile(*event->mimeData()))
+	if (IsValidFile(*event->mimeData()) != drop_type::drop_error)
 	{
 		event->accept();
 	}
