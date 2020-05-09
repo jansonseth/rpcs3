@@ -255,17 +255,45 @@ error_code cellGcmBindTile(u8 index)
 	return CELL_OK;
 }
 
+void gcmSetZcull(u8 index, u32 offset, u32 width, u32 height, u32 cullStart, u32 zFormat, u32 aaFormat, u32 zCullDir, u32 zCullFormat, u32 sFunc, u32 sRef, u32 sMask)
+{
+	const auto gcm_cfg = g_fxo->get<gcm_config>();
+
+	if (index >= rsx::limits::zculls_count)
+	{
+		cellGcmSys.error("cellGcmSetZcull: CELL_GCM_ERROR_INVALID_VALUE");
+		return;
+	}
+
+	const auto render = rsx::get_current_renderer();
+
+	auto& zcull = render->zculls[index];
+	zcull.offset = offset;
+	zcull.width = width;
+	zcull.height = height;
+	zcull.cullStart = cullStart;
+	zcull.zFormat = zFormat;
+	zcull.aaFormat = aaFormat;
+	zcull.zcullDir = zCullDir;
+	zcull.zcullFormat = zCullFormat;
+	zcull.sFunc = sFunc;
+	zcull.sRef = sRef;
+	zcull.sMask = sMask;
+	zcull.bound = (zCullFormat > 0);
+
+	vm::_ptr<CellGcmZcullInfo>(gcm_cfg->zculls_addr)[index] = zcull.pack();
+}
+
+
 error_code cellGcmBindZcull(u8 index, u32 offset, u32 width, u32 height, u32 cullStart, u32 zFormat, u32 aaFormat, u32 zCullDir, u32 zCullFormat, u32 sFunc, u32 sRef, u32 sMask)
 {
 	cellGcmSys.warning("cellGcmBindZcull(index=%d, offset=0x%x, width=%d, height=%d, cullStart=0x%x, zFormat=0x%x, aaFormat=0x%x, zCullDir=0x%x, zCullFormat=0x%x, sFunc=0x%x, sRef=0x%x, sMask=0x%x)",
 		index, offset, width, height, cullStart, zFormat, aaFormat, zCullDir, zCullFormat, sFunc, sRef, sMask);
 
-	if (index >= rsx::limits::zculls_count)
-	{
-		return CELL_GCM_ERROR_INVALID_VALUE;
-	}
+	const auto gcm_cfg = g_fxo->get<gcm_config>();
+	std::lock_guard lock(gcm_cfg->gcmio_mutex);
 
-	rsx::get_current_renderer()->zculls[index].bound = true;
+	gcmSetZcull(index, offset, width, height, cullStart, zFormat, aaFormat, zCullDir, zCullFormat, sFunc, sRef, sMask);
 
 	return CELL_OK;
 }
@@ -581,8 +609,6 @@ error_code cellGcmSetTileInfo(u8 index, u8 location, u32 offset, u32 size, u32 p
 	cellGcmSys.warning("cellGcmSetTileInfo(index=%d, location=%d, offset=%d, size=%d, pitch=%d, comp=%d, base=%d, bank=%d)",
 		index, location, offset, size, pitch, comp, base, bank);
 
-	const auto gcm_cfg = g_fxo->get<gcm_config>();
-
 	if (index >= rsx::limits::tiles_count || base >= 2048 || bank >= 4)
 	{
 		return CELL_GCM_ERROR_INVALID_VALUE;
@@ -602,6 +628,9 @@ error_code cellGcmSetTileInfo(u8 index, u8 location, u32 offset, u32 size, u32 p
 	{
 		cellGcmSys.error("cellGcmSetTileInfo: bad compression mode! (%d)", comp);
 	}
+
+	const auto gcm_cfg = g_fxo->get<gcm_config>();
+	std::lock_guard lock(gcm_cfg->gcmio_mutex);
 
 	const auto render = rsx::get_current_renderer();
 
@@ -653,34 +682,10 @@ error_code cellGcmSetWaitFlipUnsafe()
 
 void cellGcmSetZcull(u8 index, u32 offset, u32 width, u32 height, u32 cullStart, u32 zFormat, u32 aaFormat, u32 zCullDir, u32 zCullFormat, u32 sFunc, u32 sRef, u32 sMask)
 {
-	cellGcmSys.todo("cellGcmSetZcull(index=%d, offset=0x%x, width=%d, height=%d, cullStart=0x%x, zFormat=0x%x, aaFormat=0x%x, zCullDir=0x%x, zCullFormat=0x%x, sFunc=0x%x, sRef=0x%x, sMask=0x%x)",
+	cellGcmSys.warning("cellGcmSetZcull(index=%d, offset=0x%x, width=%d, height=%d, cullStart=0x%x, zFormat=0x%x, aaFormat=0x%x, zCullDir=0x%x, zCullFormat=0x%x, sFunc=0x%x, sRef=0x%x, sMask=0x%x)",
 		index, offset, width, height, cullStart, zFormat, aaFormat, zCullDir, zCullFormat, sFunc, sRef, sMask);
 
-	const auto gcm_cfg = g_fxo->get<gcm_config>();
-
-	if (index >= rsx::limits::zculls_count)
-	{
-		cellGcmSys.error("cellGcmSetZcull: CELL_GCM_ERROR_INVALID_VALUE");
-		return;
-	}
-
-	const auto render = rsx::get_current_renderer();
-
-	auto& zcull = render->zculls[index];
-	zcull.offset = offset;
-	zcull.width = width;
-	zcull.height = height;
-	zcull.cullStart = cullStart;
-	zcull.zFormat = zFormat;
-	zcull.aaFormat = aaFormat;
-	zcull.zcullDir = zCullDir;
-	zcull.zcullFormat = zCullFormat;
-	zcull.sFunc = sFunc;
-	zcull.sRef = sRef;
-	zcull.sMask = sMask;
-	zcull.bound = (zCullFormat > 0);
-
-	vm::_ptr<CellGcmZcullInfo>(gcm_cfg->zculls_addr)[index] = zcull.pack();
+	gcmSetZcull(index, offset, width, height, cullStart, zFormat, aaFormat, zCullDir, zCullFormat, sFunc, sRef, sMask);
 }
 
 error_code cellGcmUnbindTile(u8 index)
@@ -691,6 +696,9 @@ error_code cellGcmUnbindTile(u8 index)
 	{
 		return CELL_GCM_ERROR_INVALID_VALUE;
 	}
+
+	const auto gcm_cfg = g_fxo->get<gcm_config>();
+	std::lock_guard lock(gcm_cfg->gcmio_mutex);
 
 	rsx::get_current_renderer()->tiles[index].bound = false;
 
@@ -705,6 +713,9 @@ error_code cellGcmUnbindZcull(u8 index)
 	{
 		return CELL_GCM_ERROR_INVALID_VALUE;
 	}
+
+	const auto gcm_cfg = g_fxo->get<gcm_config>();
+	std::lock_guard lock(gcm_cfg->gcmio_mutex);
 
 	rsx::get_current_renderer()->zculls[index].bound = false;
 
@@ -1226,18 +1237,22 @@ error_code _cellGcmSetFlipCommand2()
 
 void _cellGcmSetFlipCommandWithWaitLabel(ppu_thread& ppu, vm::ptr<CellGcmContextData> ctx, u32 id, u32 label_index, u32 label_value)
 {
-	cellGcmSys.todo("cellGcmSetFlipCommandWithWaitLabel(ctx=*0x%x, id=0x%x, label_index=0x%x, label_value=0x%x)", ctx, id, label_index, label_value);
+	cellGcmSys.warning("cellGcmSetFlipCommandWithWaitLabel(ctx=*0x%x, id=0x%x, label_index=0x%x, label_value=0x%x)", ctx, id, label_index, label_value);
 
 	const auto gcm_cfg = g_fxo->get<gcm_config>();
+
+	// TODO: waiting should be done between resetting rsx and flipping
+	u32 cmd_size = 0;
+	cmd_size += rsx::make_command(ctx->current, NV406E_SET_CONTEXT_DMA_SEMAPHORE, {CELL_GCM_CONTEXT_DMA_SEMAPHORE_R});
+	cmd_size += rsx::make_command(ctx->current, NV406E_SEMAPHORE_OFFSET, {0x10 * label_index});
+	cmd_size += rsx::make_command(ctx->current, NV406E_SEMAPHORE_ACQUIRE, {label_value});
+	//vm::_ref<CellGcmControl>(gcm_cfg->gcm_info.control_addr).put += cmd_size;
 
 	if (auto error = gcmSetPrepareFlip<true>(ppu, ctx, id); error < 0)
 	{
 		// TODO: On actual fw this function doesn't have error checks at all
 		cellGcmSys.error("cellGcmSetFlipCommandWithWaitLabel(): gcmSetPrepareFlip failed with %s", CellGcmError{error + 0u});
 	}
-
-	// TODO: Fix this (must enqueue WaitLabel command instead)
-	vm::write32(gcm_cfg->gcm_info.label_addr + 0x10 * label_index, label_value);
 }
 
 error_code cellGcmSetTile(u8 index, u8 location, u32 offset, u32 size, u32 pitch, u8 comp, u16 base, u8 bank)
