@@ -29,6 +29,8 @@
 
 constexpr auto qstr = QString::fromStdString;
 
+breakpoint_handler* g_breakpoint_handler;
+
 debugger_frame::debugger_frame(std::shared_ptr<gui_settings> settings, QWidget *parent)
 	: custom_dock_widget(tr("Debugger"), parent), xgui_settings(settings)
 {
@@ -48,6 +50,7 @@ debugger_frame::debugger_frame(std::shared_ptr<gui_settings> settings, QWidget *
 	hbox_b_main->setContentsMargins(0, 0, 0, 0);
 
 	m_breakpoint_handler = new breakpoint_handler();
+	g_breakpoint_handler = m_breakpoint_handler;
 	m_breakpoint_list = new breakpoint_list(this, m_breakpoint_handler);
 
 	m_debugger_list = new debugger_list(this, settings, m_breakpoint_handler);
@@ -596,7 +599,7 @@ void debugger_frame::DoStep(bool stepOver)
 
 				// Set breakpoint on next instruction
 				u32 next_instruction_pc = current_instruction_pc + 4;
-				m_breakpoint_handler->AddBreakpoint(next_instruction_pc);
+				m_breakpoint_handler->AddBreakpoint(next_instruction_pc, breakpoint_type::bp_execute);
 
 				// Undefine previous step over breakpoint if it hasnt been already
 				// This can happen when the user steps over a branch that doesn't return to itself

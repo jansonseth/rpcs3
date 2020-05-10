@@ -1,8 +1,15 @@
 ﻿#pragma once
 
 #include "stdafx.h"
+#include "breakpoint_handler.h"
 
 #include <QListWidget>
+#include <QDialog>
+#include <QVBoxLayout>
+#include <QLineEdit>
+#include <QLabel>
+#include <QComboBox>
+#include <QPushButton>
 
 class CPUDisAsm;
 class cpu_thread;
@@ -16,8 +23,9 @@ public:
 	breakpoint_list(QWidget* parent, breakpoint_handler* handler);
 	void UpdateCPUData(std::weak_ptr<cpu_thread> cpu, std::shared_ptr<CPUDisAsm> disasm);
 	void ClearBreakpoints();
-	void AddBreakpoint(u32 addr);
+	void AddBreakpoint(u32 addr, bs_t<breakpoint_type> type);
 	void RemoveBreakpoint(u32 addr);
+	void ShowAddBreakpointWindow();
 
 	QColor m_text_color_bp;
 	QColor m_color_bp;
