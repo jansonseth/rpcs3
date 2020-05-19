@@ -9,7 +9,6 @@ mm_joystick_handler::mm_joystick_handler() : PadHandlerBase(pad_handler::mm)
 	init_configs();
 
 	// Define border values
-	thumb_min = 0;
 	thumb_max = 255;
 	trigger_min = 0;
 	trigger_max = 255;
@@ -383,7 +382,7 @@ std::unordered_map<u64, u16> mm_joystick_handler::GetButtonValues(const JOYINFOE
 
 	auto add_axis_value = [&](DWORD axis, UINT min, UINT max, u64 pos, u64 neg)
 	{
-		float val = ScaleStickInput2(axis, min, max);
+		float val = ScaledInput2(axis, min, max);
 		if (val < 0)
 		{
 			button_values.emplace(pos, 0);

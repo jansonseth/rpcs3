@@ -4261,10 +4261,10 @@ public:
 		m_engine->clearAllGlobalMappings();
 
 		// Create LLVM module
-		std::unique_ptr<Module> module = std::make_unique<Module>(m_hash + ".obj", m_context);
-		module->setTargetTriple(Triple::normalize("x86_64-unknown-linux-gnu"));
-		module->setDataLayout(m_jit.get_engine().getTargetMachine()->createDataLayout());
-		m_module = module.get();
+		std::unique_ptr<Module> _module = std::make_unique<Module>(m_hash + ".obj", m_context);
+		_module->setTargetTriple(Triple::normalize("x86_64-unknown-linux-gnu"));
+		_module->setDataLayout(m_jit.get_engine().getTargetMachine()->createDataLayout());
+		m_module = _module.get();
 
 		// Initialize IR Builder
 		IRBuilder<> irb(m_context);
@@ -4450,7 +4450,7 @@ public:
 			m_ir->CreateUnreachable();
 		}
 
-		m_dispatch = cast<Function>(module->getOrInsertFunction("spu-null", entry_chunk->chunk->getFunctionType()).getCallee());
+		m_dispatch = cast<Function>(_module->getOrInsertFunction("spu-null", entry_chunk->chunk->getFunctionType()).getCallee());
 		m_dispatch->setLinkage(llvm::GlobalValue::InternalLinkage);
 		m_dispatch->setCallingConv(entry_chunk->chunk->getCallingConv());
 		set_function(m_dispatch);
@@ -4709,7 +4709,7 @@ public:
 		}
 
 		// Initialize pass manager
-		legacy::FunctionPassManager pm(module.get());
+		legacy::FunctionPassManager pm(_module.get());
 
 		// Basic optimizations
 		pm.add(createEarlyCSEPass());
@@ -4765,11 +4765,11 @@ public:
 		if (g_cfg.core.spu_debug)
 		{
 			fmt::append(log, "LLVM IR at 0x%x:\n", func.entry_point);
-			out << *module; // print IR
+			out << *_module; // print IR
 			out << "\n\n";
 		}
 
-		if (verifyModule(*module, &out))
+		if (verifyModule(*_module, &out))
 		{
 			out.flush();
 			spu_log.error("LLVM: Verification failed at 0x%x:\n%s", func.entry_point, log);
@@ -4785,11 +4785,11 @@ public:
 		if (g_cfg.core.spu_debug)
 		{
 			// Testing only
-			m_jit.add(std::move(module), m_spurt->get_cache_path() + "llvm/");
+			m_jit.add(std::move(_module), m_spurt->get_cache_path() + "llvm/");
 		}
 		else
 		{
-			m_jit.add(std::move(module));
+			m_jit.add(std::move(_module));
 		}
 
 		m_jit.fin();
@@ -4861,10 +4861,10 @@ public:
 		m_engine->clearAllGlobalMappings();
 
 		// Create LLVM module
-		std::unique_ptr<Module> module = std::make_unique<Module>("spu_interpreter.obj", m_context);
-		module->setTargetTriple(Triple::normalize("x86_64-unknown-linux-gnu"));
-		module->setDataLayout(m_jit.get_engine().getTargetMachine()->createDataLayout());
-		m_module = module.get();
+		std::unique_ptr<Module> _module = std::make_unique<Module>("spu_interpreter.obj", m_context);
+		_module->setTargetTriple(Triple::normalize("x86_64-unknown-linux-gnu"));
+		_module->setDataLayout(m_jit.get_engine().getTargetMachine()->createDataLayout());
+		m_module = _module.get();
 
 		// Initialize IR Builder
 		IRBuilder<> irb(m_context);
@@ -4876,7 +4876,7 @@ public:
 		m_function_table = new GlobalVariable(*m_module, ArrayType::get(if_type->getPointerTo(), 1ull << m_interp_magn), true, GlobalValue::InternalLinkage, nullptr);
 
 		// Add return function
-		const auto ret_func = cast<Function>(module->getOrInsertFunction("spu_ret", if_type).getCallee());
+		const auto ret_func = cast<Function>(_module->getOrInsertFunction("spu_ret", if_type).getCallee());
 		ret_func->setCallingConv(CallingConv::GHC);
 		ret_func->setLinkage(GlobalValue::InternalLinkage);
 		m_ir->SetInsertPoint(BasicBlock::Create(m_context, "", ret_func));
@@ -4966,7 +4966,7 @@ public:
 			}
 
 			// Decode instruction name, access function
-			const auto f = cast<Function>(module->getOrInsertFunction(fname, if_type).getCallee());
+			const auto f = cast<Function>(_module->getOrInsertFunction(fname, if_type).getCallee());
 
 			// Build if necessary
 			if (f->empty())
@@ -5179,7 +5179,7 @@ public:
 		m_function_table = nullptr;
 
 		// Initialize pass manager
-		legacy::FunctionPassManager pm(module.get());
+		legacy::FunctionPassManager pm(_module.get());
 
 		// Basic optimizations
 		pm.add(createEarlyCSEPass());
@@ -5195,11 +5195,11 @@ public:
 		if (g_cfg.core.spu_debug)
 		{
 			fmt::append(log, "LLVM IR (interpreter):\n");
-			out << *module; // print IR
+			out << *_module; // print IR
 			out << "\n\n";
 		}
 
-		if (verifyModule(*module, &out))
+		if (verifyModule(*_module, &out))
 		{
 			out.flush();
 			spu_log.error("LLVM: Verification failed:\n%s", log);
@@ -5215,11 +5215,11 @@ public:
 		if (g_cfg.core.spu_debug)
 		{
 			// Testing only
-			m_jit.add(std::move(module), m_spurt->get_cache_path() + "llvm/");
+			m_jit.add(std::move(_module), m_spurt->get_cache_path() + "llvm/");
 		}
 		else
 		{
-			m_jit.add(std::move(module));
+			m_jit.add(std::move(_module));
 		}
 
 		m_jit.fin();
@@ -5772,14 +5772,22 @@ public:
 			m_block->store[s_reg_mfc_tag] = nullptr;
 			m_block->store[s_reg_mfc_size] = nullptr;
 
-			if (!g_use_rtm)
-			{
-				// TODO: don't require TSX (current implementation is TSX-only)
-				break;
-			}
-
 			if (auto ci = llvm::dyn_cast<llvm::ConstantInt>(trunc<u8>(val).eval(m_ir)))
 			{
+				if (u64 cmdh = ci->getZExtValue() & ~(MFC_BARRIER_MASK | MFC_FENCE_MASK | MFC_RESULT_MASK); !g_use_rtm)
+				{
+					// TODO: don't require TSX (current implementation is TSX-only)
+					if (cmdh == MFC_GET_CMD && g_cfg.core.spu_accurate_putlluc)
+					{
+						break;
+					}
+
+					if (cmdh == MFC_PUT_CMD || cmdh == MFC_SNDSIG_CMD)
+					{
+						break;
+					}
+				}
+	
 				const auto eal = get_reg_fixed<u32>(s_reg_mfc_eal);
 				const auto lsa = get_reg_fixed<u32>(s_reg_mfc_lsa);
 				const auto tag = get_reg_fixed<u8>(s_reg_mfc_tag);
@@ -5928,7 +5936,7 @@ public:
 							m_ir->CreateStore(m_ir->CreateLoad(m_ir->CreateBitCast(_src, vtype), true), m_ir->CreateBitCast(_dst, vtype), true);
 						}
 					}
-					else
+					else if (csize)
 					{
 						// TODO
 						auto spu_memcpy = [](u8* dst, const u8* src, u32 size)
@@ -7445,7 +7453,7 @@ public:
 		const auto mb = eval(sext<s32[4]>(fcmp_uno(b != fsplat<f32[4]>(0.))));
 		const auto ca = eval(bitcast<f32[4]>(bitcast<s32[4]>(a) & mb));
 		const auto cb = eval(bitcast<f32[4]>(bitcast<s32[4]>(b) & ma));
-				
+
 		// Optimization: Emit only a floating multiply if the addend is zero
 		// This is odd since SPU code could just use the FM instruction, but it seems common enough
 		if (auto cv = llvm::dyn_cast<llvm::Constant>(c.value))

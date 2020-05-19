@@ -376,7 +376,7 @@ std::string ppu_thread::dump_regs() const
 	{
 		auto reg = gpr[i];
 
-		fmt::append(ret, "r%d%s = 0x%-8llx", i, i <= 9 ? " " : "", reg);
+		fmt::append(ret, "r%d%s: 0x%-8llx", i, i <= 9 ? " " : "", reg);
 
 		const u32 max_str_len = 32;
 		const u32 hex_count = 8;
@@ -441,25 +441,25 @@ std::string ppu_thread::dump_regs() const
 
 	for (uint i = 0; i < 32; ++i)
 	{
-		fmt::append(ret, "f%d%s = %.6G\n", i, i <= 9 ? " " : "", fpr[i]);
+		fmt::append(ret, "f%d%s: %.6G\n", i, i <= 9 ? " " : "", fpr[i]);
 	}
 
 	for (uint i = 0; i < 32; ++i)
 	{
-		fmt::append(ret, "v%d%s = %s [x: %g y: %g z: %g w: %g]\n", i, i <= 9 ? " " : "", vr[i], vr[i]._f[3], vr[i]._f[2], vr[i]._f[1], vr[i]._f[0]);
+		fmt::append(ret, "v%d%s: %s [x: %g y: %g z: %g w: %g]\n", i, i <= 9 ? " " : "", vr[i], vr[i]._f[3], vr[i]._f[2], vr[i]._f[1], vr[i]._f[0]);
 	}
 
-	fmt::append(ret, "CR = 0x%08x\n", cr.pack());
-	fmt::append(ret, "LR = 0x%llx\n", lr);
-	fmt::append(ret, "CTR = 0x%llx\n", ctr);
-	fmt::append(ret, "VRSAVE = 0x%08x\n", vrsave);
-	fmt::append(ret, "XER = [CA=%u | OV=%u | SO=%u | CNT=%u]\n", xer.ca, xer.ov, xer.so, xer.cnt);
-	fmt::append(ret, "VSCR = [SAT=%u | NJ=%u]\n", sat, nj);
-	fmt::append(ret, "FPSCR = [FL=%u | FG=%u | FE=%u | FU=%u]\n", fpscr.fl, fpscr.fg, fpscr.fe, fpscr.fu);
+	fmt::append(ret, "CR: 0x%08x\n", cr.pack());
+	fmt::append(ret, "LR: 0x%llx\n", lr);
+	fmt::append(ret, "CTR: 0x%llx\n", ctr);
+	fmt::append(ret, "VRSAVE: 0x%08x\n", vrsave);
+	fmt::append(ret, "XER: [CA=%u | OV=%u | SO=%u | CNT=%u]\n", xer.ca, xer.ov, xer.so, xer.cnt);
+	fmt::append(ret, "VSCR: [SAT=%u | NJ=%u]\n", sat, nj);
+	fmt::append(ret, "FPSCR: [FL=%u | FG=%u | FE=%u | FU=%u]\n", fpscr.fl, fpscr.fg, fpscr.fe, fpscr.fu);
 	if (const u32 addr = raddr)
-		fmt::append(ret, "Reservation Addr = 0x%x", addr);
+		fmt::append(ret, "Reservation Addr: 0x%x", addr);
 	else
-		fmt::append(ret, "Reservation Addr = none");
+		fmt::append(ret, "Reservation Addr: none");
 
 	return ret;
 }
@@ -541,7 +541,7 @@ std::string ppu_thread::dump_misc() const
 
 		for (u32 i = 3; i <= 6; i++)
 			if (gpr[i] != syscall_args[i - 3])
-				fmt::append(ret, " ** r%d = 0x%llx\n", i, syscall_args[i - 3]);
+				fmt::append(ret, " ** r%d: 0x%llx\n", i, syscall_args[i - 3]);
 	}
 	else if (is_paused())
 	{
@@ -1063,20 +1063,6 @@ static T ppu_load_acquire_reservation(ppu_thread& ppu, u32 addr)
 		}
 	}
 
-	ppu.rtime = vm::reservation_acquire(addr, sizeof(T));
-
-	if ((ppu.rtime & 127) == 0) [[likely]]
-	{
-		ppu.rdata = data;
-
-		if (vm::reservation_acquire(addr, sizeof(T)) == ppu.rtime) [[likely]]
-		{
-			return static_cast<T>(ppu.rdata << data_off >> size_off);
-		}
-	}
-
-	vm::passive_unlock(ppu);
-
 	for (u64 i = 0;; i++)
 	{
 		ppu.rtime = vm::reservation_acquire(addr, sizeof(T));
@@ -1091,17 +1077,22 @@ static T ppu_load_acquire_reservation(ppu_thread& ppu, u32 addr)
 			}
 		}
 
-		if (i < 20)
+		if (ppu.state)
+		{
+			ppu.check_state();
+		}
+		else if (i < 20)
 		{
 			busy_wait(300);
 		}
 		else
 		{
+			ppu.state += cpu_flag::wait;
 			std::this_thread::yield();
+			ppu.check_state();
 		}
 	}
 
-	vm::passive_lock(ppu);
 	return static_cast<T>(ppu.rdata << data_off >> size_off);
 }
 
@@ -1214,10 +1205,21 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, T reg_value)
 	constexpr u64 size_off = (sizeof(T) * 8) & 63;
 
 	const T old_data = static_cast<T>(ppu.rdata << ((addr & 7) * 8) >> size_off);
+	auto& res = vm::reservation_acquire(addr, sizeof(T));
 
-	if (ppu.raddr != addr || addr % sizeof(T) || old_data != data.load() || ppu.rtime != (vm::reservation_acquire(addr, sizeof(T)) & -128))
+	if (std::exchange(ppu.raddr, 0) != addr || addr % sizeof(T) || old_data != data || ppu.rtime != res)
 	{
-		ppu.raddr = 0;
+		return false;
+	}
+
+	if (reg_value == old_data)
+	{
+		if (res.compare_and_swap_test(ppu.rtime, ppu.rtime + 128))
+		{
+			res.notify_all();
+			return true;
+		}
+
 		return false;
 	}
 
@@ -1230,27 +1232,21 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, T reg_value)
 		case 0:
 		{
 			// Reservation lost
-			ppu.raddr = 0;
 			return false;
 		}
 		case 1:
 		{
-			vm::reservation_notifier(addr, sizeof(T)).notify_all();
-			ppu.raddr = 0;
+			res.notify_all();
 			return true;
 		}
 		}
 
-		auto& res = vm::reservation_acquire(addr, sizeof(T));
-
-		ppu.raddr = 0;
-
-		if (res == ppu.rtime && res.compare_and_swap_test(ppu.rtime, ppu.rtime | 1))
+		if (res == ppu.rtime && vm::reservation_trylock(res, ppu.rtime))
 		{
 			if (data.compare_and_swap_test(old_data, reg_value))
 			{
 				res += 127;
-				vm::reservation_notifier(addr, sizeof(T)).notify_all();
+				res.notify_all();
 				return true;
 			}
 
@@ -1260,25 +1256,23 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, T reg_value)
 		return false;
 	}
 
-	vm::passive_unlock(ppu);
+	if (!vm::reservation_trylock(res, ppu.rtime))
+	{
+		return false;
+	}
 
-	auto& res = vm::reservation_lock(addr, sizeof(T));
-	const u64 old_time = res.load() & -128;
-
-	const bool result = ppu.rtime == old_time && data.compare_and_swap_test(old_data, reg_value);
+	const bool result = data.compare_and_swap_test(old_data, reg_value);
 
 	if (result)
 	{
-		res.release(old_time + 128);
-		vm::reservation_notifier(addr, sizeof(T)).notify_all();
+		res.release(ppu.rtime + 128);
+		res.notify_all();
 	}
 	else
 	{
-		res.release(old_time);
+		res.release(ppu.rtime);
 	}
 
-	vm::passive_lock(ppu);
-	ppu.raddr = 0;
 	return result;
 }
 
@@ -1598,6 +1592,7 @@ extern void ppu_initialize(const ppu_module& info)
 			{
 				non_win32,
 				accurate_fma,
+				accurate_ppu_vector_nan,
 
 				__bitset_enum_max
 			};
@@ -1610,6 +1605,10 @@ extern void ppu_initialize(const ppu_module& info)
 			if (g_cfg.core.llvm_accurate_dfma)
 			{
 				settings += ppu_settings::accurate_fma;
+			}
+			if (g_cfg.core.llvm_ppu_accurate_vector_nan)
+			{
+				settings += ppu_settings::accurate_ppu_vector_nan;
 			}
 
 			// Write version, hash, CPU, settings
@@ -1804,14 +1803,14 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module& module_part, co
 	using namespace llvm;
 
 	// Create LLVM module
-	std::unique_ptr<Module> module = std::make_unique<Module>(obj_name, jit.get_context());
+	std::unique_ptr<Module> _module = std::make_unique<Module>(obj_name, jit.get_context());
 
 	// Initialize target
-	module->setTargetTriple(Triple::normalize(sys::getProcessTriple()));
-	module->setDataLayout(jit.get_engine().getTargetMachine()->createDataLayout());
+	_module->setTargetTriple(Triple::normalize(sys::getProcessTriple()));
+	_module->setDataLayout(jit.get_engine().getTargetMachine()->createDataLayout());
 
 	// Initialize translator
-	PPUTranslator translator(jit.get_context(), module.get(), module_part, jit.get_engine());
+	PPUTranslator translator(jit.get_context(), _module.get(), module_part, jit.get_engine());
 
 	// Define some types
 	const auto _void = Type::getVoidTy(jit.get_context());
@@ -1822,13 +1821,13 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module& module_part, co
 	{
 		if (func.size)
 		{
-			const auto f = cast<Function>(module->getOrInsertFunction(func.name, _func).getCallee());
+			const auto f = cast<Function>(_module->getOrInsertFunction(func.name, _func).getCallee());
 			f->addAttribute(1, Attribute::NoAlias);
 		}
 	}
 
 	{
-		legacy::FunctionPassManager pm(module.get());
+		legacy::FunctionPassManager pm(_module.get());
 
 		// Basic optimizations
 		//pm.add(createCFGSimplificationPass());
@@ -1888,12 +1887,12 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module& module_part, co
 
 		if (g_cfg.core.llvm_logs)
 		{
-			out << *module; // print IR
+			out << *_module; // print IR
 			fs::file(cache_path + obj_name + ".log", fs::rewrite).write(out.str());
 			result.clear();
 		}
 
-		if (verifyModule(*module, &out))
+		if (verifyModule(*_module, &out))
 		{
 			out.flush();
 			ppu_log.error("LLVM: Verification failed for %s:\n%s", obj_name, result);
@@ -1901,10 +1900,10 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module& module_part, co
 			return;
 		}
 
-		ppu_log.notice("LLVM: %zu functions generated", module->getFunctionList().size());
+		ppu_log.notice("LLVM: %zu functions generated", _module->getFunctionList().size());
 	}
 
 	// Load or compile module
-	jit.add(std::move(module), cache_path);
+	jit.add(std::move(_module), cache_path);
 #endif // LLVM_AVAILABLE
 }

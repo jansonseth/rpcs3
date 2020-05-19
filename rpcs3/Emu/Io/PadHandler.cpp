@@ -100,18 +100,18 @@ long PadHandlerBase::FindKeyCodeByString(const std::unordered_map<u64, std::stri
 }
 
 // Get new scaled value between 0 and 255 based on its minimum and maximum
-float PadHandlerBase::ScaleStickInput(s32 raw_value, int minimum, int maximum)
+float PadHandlerBase::ScaledInput(s32 raw_value, int minimum, int maximum)
 {
 	// value based on max range converted to [0, 1]
-	float val = static_cast<float>(std::clamp(raw_value, minimum, maximum) - minimum) / (abs(maximum) + abs(minimum));
+	const float val = static_cast<float>(std::clamp(raw_value, minimum, maximum) - minimum) / (abs(maximum) + abs(minimum));
 	return 255.0f * val;
 }
 
 // Get new scaled value between -255 and 255 based on its minimum and maximum
-float PadHandlerBase::ScaleStickInput2(s32 raw_value, int minimum, int maximum)
+float PadHandlerBase::ScaledInput2(s32 raw_value, int minimum, int maximum)
 {
 	// value based on max range converted to [0, 1]
-	float val = static_cast<float>(std::clamp(raw_value, minimum, maximum) - minimum) / (abs(maximum) + abs(minimum));
+	const float val = static_cast<float>(std::clamp(raw_value, minimum, maximum) - minimum) / (abs(maximum) + abs(minimum));
 	return (510.0f * val) - 255.0f;
 }
 
@@ -124,11 +124,12 @@ u16 PadHandlerBase::NormalizeTriggerInput(u16 value, int threshold)
 	}
 	else if (threshold <= trigger_min)
 	{
-		return value;
+		return static_cast<u16>(ScaledInput(value, trigger_min, trigger_max));
 	}
 	else
 	{
-		return static_cast<u16>(static_cast<float>(trigger_max) * (value - threshold) / (trigger_max - threshold));
+		const s32 val = static_cast<s32>(static_cast<float>(trigger_max) * (value - threshold) / (trigger_max - threshold));
+		return static_cast<u16>(ScaledInput(val, trigger_min, trigger_max));
 	}
 }
 
@@ -141,7 +142,7 @@ u16 PadHandlerBase::NormalizeDirectedInput(s32 raw_value, s32 threshold, s32 max
 		return static_cast<u16>(0);
 	}
 
-	float val = static_cast<float>(std::clamp(raw_value, 0, maximum)) / maximum; // value based on max range converted to [0, 1]
+	const float val = static_cast<float>(std::clamp(raw_value, 0, maximum)) / maximum; // value based on max range converted to [0, 1]
 
 	if (threshold <= 0)
 	{
@@ -149,7 +150,7 @@ u16 PadHandlerBase::NormalizeDirectedInput(s32 raw_value, s32 threshold, s32 max
 	}
 	else
 	{
-		float thresh = static_cast<float>(threshold) / maximum; // threshold converted to [0, 1]
+		const float thresh = static_cast<float>(threshold) / maximum; // threshold converted to [0, 1]
 		return static_cast<u16>(255.0f * std::min(1.0f, (val - thresh) / (1.0f - thresh)));
 	}
 }
@@ -160,7 +161,7 @@ u16 PadHandlerBase::NormalizeStickInput(u16 raw_value, int threshold, int multip
 
 	if (ignore_threshold)
 	{
-		return static_cast<u16>(ScaleStickInput(scaled_value, 0, thumb_max));
+		return static_cast<u16>(ScaledInput(scaled_value, 0, thumb_max));
 	}
 	else
 	{
@@ -173,12 +174,12 @@ u16 PadHandlerBase::NormalizeStickInput(u16 raw_value, int threshold, int multip
 // return is new x and y values in 0-255 range
 std::tuple<u16, u16> PadHandlerBase::NormalizeStickDeadzone(s32 inX, s32 inY, u32 deadzone)
 {
-	const float dzRange = deadzone / static_cast<float>((std::abs(thumb_max) + std::abs(thumb_min)));
+	const float dz_range = deadzone / static_cast<float>(std::abs(thumb_max)); // NOTE: thumb_max should be positive anyway
 
 	float X = inX / 255.0f;
 	float Y = inY / 255.0f;
 
-	if (dzRange > 0.f)
+	if (dz_range > 0.f)
 	{
 		const float mag = std::min(sqrtf(X * X + Y * Y), 1.f);
 
@@ -187,16 +188,16 @@ std::tuple<u16, u16> PadHandlerBase::NormalizeStickDeadzone(s32 inX, s32 inY, u3
 			return std::tuple<u16, u16>(ConvertAxis(X), ConvertAxis(Y));
 		}
 
-		if (mag > dzRange)
+		if (mag > dz_range)
 		{
-			const float pos = std::lerp(0.13f, 1.f, (mag - dzRange) / (1 - dzRange));
+			const float pos = std::lerp(0.13f, 1.f, (mag - dz_range) / (1 - dz_range));
 			const float scale = pos / mag;
 			X = X * scale;
 			Y = Y * scale;
 		}
 		else
 		{
-			const float pos = std::lerp(0.f, 0.13f, mag / dzRange);
+			const float pos = std::lerp(0.f, 0.13f, mag / dz_range);
 			const float scale = pos / mag;
 			X = X * scale;
 			Y = Y * scale;

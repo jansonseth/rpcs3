@@ -14,6 +14,7 @@
 #include "Overlays/overlay_perf_metrics.h"
 #include "Utilities/date_time.h"
 #include "Utilities/span.h"
+#include "Utilities/asm.h"
 #include "Utilities/StrUtil.h"
 
 #include <cereal/archives/binary.hpp>
@@ -742,7 +743,7 @@ namespace rsx
 	{
 		//TODO: Properly support alpha-to-coverage and alpha-to-one behavior in shaders
 		auto fragment_alpha_func = rsx::method_registers.alpha_func();
-		auto alpha_ref = rsx::method_registers.alpha_ref() / 255.f;
+		auto alpha_ref = rsx::method_registers.alpha_ref();
 		auto rop_control = rsx::method_registers.alpha_test_enabled()? 1u : 0u;
 
 		if (rsx::method_registers.msaa_alpha_to_coverage_enabled() && !backend_config.supports_hw_a2c)
@@ -2443,7 +2444,7 @@ namespace rsx
 
 				for (u32 ea = address >> 20, end = ea + (size >> 20); ea < end; ea++)
 				{
-					const u32 io = std::rotr<u32>(iomap_table.io[ea], 20);
+					const u32 io = utils::ror32(iomap_table.io[ea], 20);
 
 					if (io + 1)
 					{

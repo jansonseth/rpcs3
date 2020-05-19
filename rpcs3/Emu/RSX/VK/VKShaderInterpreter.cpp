@@ -185,8 +185,6 @@ namespace vk
 		"	uvec4 fp_instructions[];\n"
 		"};\n\n";
 
-		::program_common::insert_fog_declaration(builder, "vec4", "fogc", true);
-
 		builder << program_common::interpreter::get_fragment_interpreter();
 		const std::string s = builder.str();
 
@@ -435,24 +433,25 @@ namespace vk
 		shader_stages[1].module = fs->get_handle();
 		shader_stages[1].pName = "main";
 
-		VkDynamicState dynamic_state_descriptors[VK_DYNAMIC_STATE_RANGE_SIZE] = {};
-		VkPipelineDynamicStateCreateInfo dynamic_state_info = {};
-		dynamic_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_VIEWPORT;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_SCISSOR;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_LINE_WIDTH;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_BLEND_CONSTANTS;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_STENCIL_WRITE_MASK;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_STENCIL_REFERENCE;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_DEPTH_BIAS;
+		std::vector<VkDynamicState> dynamic_state_descriptors;
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_VIEWPORT);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_SCISSOR);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_BLEND_CONSTANTS);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_STENCIL_WRITE_MASK);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_STENCIL_REFERENCE);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
 
 		if (vk::get_current_renderer()->get_depth_bounds_support())
 		{
-			dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS;
+			dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_DEPTH_BOUNDS);
 		}
 
-		dynamic_state_info.pDynamicStates = dynamic_state_descriptors;
+		VkPipelineDynamicStateCreateInfo dynamic_state_info = {};
+		dynamic_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+		dynamic_state_info.pDynamicStates = dynamic_state_descriptors.data();
+		dynamic_state_info.dynamicStateCount = ::size32(dynamic_state_descriptors);
 
 		VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 

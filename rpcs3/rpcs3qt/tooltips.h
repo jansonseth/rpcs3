@@ -79,6 +79,7 @@ public:
 		const QString accurate_getllar             = tr("Never use this.");
 		const QString accurate_putlluc             = tr("Never use this.");
 		const QString accurate_llvm_dfma           = tr("Provides extra accuracy on FMA instructions at the cost of performance.\nWhile disabling it might give a decent performance boost if your CPU doesn't support FMA, it may also introduce subtle bugs that otherwise do not occur.\nYou can't disable it if your CPU supports FMA.");
+		const QString accurate_vector_nan          = tr("Forces the floating point NaN (Not A Number) values outputted from PPU vector instructions to be accurate to the real hardware. (0x7FC00000)");
 		const QString accurate_rsx_access          = tr("Never use this.");
 		const QString hook_static_functions        = tr("Allows to hook some functions like 'memcpy' replacing them with high-level implementations. May do nothing or break things. Experimental.");
 		const QString gl_legacy_buffers            = tr("Enables use of classic OpenGL buffers which allows capturing tools to work with RPCS3 e.g RenderDoc.\nIf unsure, don't use this option.");
@@ -103,6 +104,7 @@ public:
 		const QString resize_on_boot               = tr("Automatically resizes the game window on boot.\nThis does not change the internal game resolution.");
 		const QString show_trophy_popups           = tr("Show trophy pop-ups when a trophy is unlocked.");
 		const QString disable_mouse                = tr("Disables the activation of fullscreen mode per double-click while the game screen is active.\nCheck this if you want to play with mouse and keyboard (for example with UCR).");
+		const QString disable_kb_hotkeys           = tr("Disables keyboard hotkeys such as Ctrl-S, Ctrl-E, Ctrl-R, Ctrl-P while the game screen is active.\nCheck this if you want to play with mouse and keyboard.");
 		const QString max_llvm_threads             = tr("Limits the maximum number of threads used for the initial PPU and SPU module compilation.\nLower this in order to increase performance of other open applications.\nThe default uses all available threads.");
 		const QString show_mouse_in_fullscreen     = tr("Shows the mouse cursor when the fullscreen mode is active.\nCurrently this may not work every time.");
 		const QString show_shader_compilation_hint = tr("Show shader compilation hints using the native overlay.");
@@ -194,6 +196,7 @@ public:
 	const struct gamepad_settings
 	{
 		const QString null        = tr("This controller is disabled and will appear as disconnected to software. Choose another handler to enable it.");
+		const QString ldd_pad     = tr("This port is currently assigned to a custom controller by the application and can't be changed.");
 		const QString keyboard    = tr("While it is possible to use a keyboard as a pad in RPCS3, the use of an actual controller is strongly recommended.\nTo bind mouse movement to a button or joystick, click on the desired button to activate it, then click and hold while dragging the mouse to a direction.");
 		const QString ds3_windows = tr("In order to use the DualShock 3 handler, you need to install the official DualShock 3 driver first.\nSee the <a href=\"https://wiki.rpcs3.net/index.php?title=Help:Controller_Configuration\">RPCS3 Wiki</a> for instructions.");
 		const QString ds3_linux   = tr("In order to use the DualShock 3 handler, you might need to add udev rules to let RPCS3 access the controller.\nSee the <a href=\"https://wiki.rpcs3.net/index.php?title=Help:Controller_Configuration\">RPCS3 Wiki</a> for instructions.");

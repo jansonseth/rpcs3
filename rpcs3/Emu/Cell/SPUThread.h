@@ -233,6 +233,20 @@ public:
 		return (old & bit_count) != 0;
 	}
 
+	// Reading without modification
+	bool try_read(u32& out) const
+	{
+		const u64 old = data.load();
+
+		if (old & bit_count) [[likely]]
+		{
+			out = static_cast<u32>(old);
+			return true;
+		}
+
+		return false;
+	}
+
 	// Pop unconditionally (loading last value), may require notification
 	u32 pop(cpu_thread& spu)
 	{
@@ -269,6 +283,7 @@ struct spu_channel_4_t
 	{
 		u8 waiting;
 		u8 count;
+		u8 _pad[2];
 		u32 value0;
 		u32 value1;
 		u32 value2;
@@ -338,6 +353,23 @@ public:
 		});
 	}
 
+	// returns current queue size without modification
+	uint try_read(u32 (&out)[4]) const
+	{
+		const sync_var_t data = values.load();
+		const uint result = data.count;
+
+		if (result != 0)
+		{
+			out[0] = data.value0;
+			out[1] = data.value1;
+			out[2] = data.value2;
+			out[3] = value3;
+		}
+
+		return result;
+	}
+
 	u32 get_count() const
 	{
 		return std::as_const(values).raw().count;
@@ -345,7 +377,7 @@ public:
 
 	void set_values(u32 count, u32 value0, u32 value1 = 0, u32 value2 = 0, u32 value3 = 0)
 	{
-		this->values.raw() = { 0, static_cast<u8>(count), value0, value1, value2 };
+		this->values.raw() = { 0, static_cast<u8>(count), {}, value0, value1, value2 };
 		this->value3 = value3;
 	}
 };
@@ -599,6 +631,8 @@ public:
 
 	std::array<std::pair<u32, std::weak_ptr<lv2_event_queue>>, 32> spuq; // Event Queue Keys for SPU Thread
 	std::weak_ptr<lv2_event_queue> spup[64]; // SPU Ports
+	spu_channel exit_status{}; // Threaded SPU exit status (not a channel, but the interface fits)
+	atomic_t<u32> last_exit_status; // Value to be written in exit_status after checking group termination
 
 	const u32 index; // SPU index
 	const u32 offset; // SPU LS offset

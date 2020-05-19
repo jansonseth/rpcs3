@@ -786,7 +786,7 @@ void main_window::DecryptSPRXLibraries()
 	{
 		return;
 	}
-	
+
 	if (!m_gui_settings->GetBootConfirmation(this))
 	{
 		return;
@@ -799,9 +799,9 @@ void main_window::DecryptSPRXLibraries()
 
 	gui_log.notice("Decrypting binaries...");
 
-	for (const QString& module : modules)
+	for (const QString& _module : modules)
 	{
-		const std::string old_path = sstr(module);
+		const std::string old_path = sstr(_module);
 
 		fs::file elf_file(old_path);
 
@@ -811,7 +811,7 @@ void main_window::DecryptSPRXLibraries()
 
 			if (elf_file)
 			{
-				const std::string bin_ext  = module.toLower().endsWith(".sprx") ? ".prx" : ".elf";
+				const std::string bin_ext  = _module.toLower().endsWith(".sprx") ? ".prx" : ".elf";
 				const std::string new_path = old_path.substr(0, old_path.find_last_of('.')) + bin_ext;
 
 				if (fs::file new_file{new_path, fs::rewrite})
@@ -1946,9 +1946,6 @@ void main_window::ConfigureGuiFromSettings(bool configure_all)
 			i--; // list count is now an entry shorter so we have to repeat the same index in order to load all other entries
 		}
 	}
-
-	// hide utilities from the average user
-	ui->menuUtilities->menuAction()->setVisible(m_gui_settings->GetValue(gui::m_showDebugTab).toBool());
 
 	ui->showLogAct->setChecked(m_gui_settings->GetValue(gui::mw_logger).toBool());
 	ui->showGameListAct->setChecked(m_gui_settings->GetValue(gui::mw_gamelist).toBool());

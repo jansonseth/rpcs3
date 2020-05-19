@@ -377,8 +377,8 @@ error_code sys_event_flag_cancel(ppu_thread& ppu, u32 id, vm::ptr<u32> num)
 		// Set count
 		value = ::size32(flag->sq);
 
-		// Signal all threads to return CELL_ECANCELED
-		while (auto thread = flag->schedule<ppu_thread>(flag->sq, flag->protocol))
+		// Signal all threads to return CELL_ECANCELED (protocol does not matter)
+		for (auto thread : ::as_rvalue(std::move(flag->sq)))
 		{
 			auto& ppu = static_cast<ppu_thread&>(*thread);
 
@@ -410,11 +410,6 @@ error_code sys_event_flag_get(ppu_thread& ppu, u32 id, vm::ptr<u64> flags)
 
 	sys_event_flag.trace("sys_event_flag_get(id=0x%x, flags=*0x%x)", id, flags);
 
-	if (!flags)
-	{
-		return CELL_EFAULT;
-	}
-
 	const auto flag = idm::check<lv2_obj, lv2_event_flag>(id, [](lv2_event_flag& flag)
 	{
 		return +flag.pattern;
@@ -422,8 +417,13 @@ error_code sys_event_flag_get(ppu_thread& ppu, u32 id, vm::ptr<u64> flags)
 
 	if (!flag)
 	{
-		*flags = 0;
+		if (flags) *flags = 0;
 		return CELL_ESRCH;
+	}
+
+	if (!flags)
+	{
+		return CELL_EFAULT;
 	}
 
 	*flags = flag.ret;

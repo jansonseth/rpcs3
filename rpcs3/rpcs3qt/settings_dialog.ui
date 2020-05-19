@@ -1800,6 +1800,13 @@
                </widget>
               </item>
               <item>
+               <widget class="QCheckBox" name="AccurateVectorNaN">
+                <property name="text">
+                 <string>PPU LLVM Accurate Vector NaNs</string>
+                </property>
+               </widget>
+              </item>
+              <item>
                <widget class="QCheckBox" name="silenceAllLogs">
                 <property name="text">
                  <string>Silence All Logs</string>
@@ -2337,6 +2344,13 @@
                  <string>Ignore doubleclicks for Fullscreen</string>
                 </property>
                </widget>
+              </item>
+              <item>
+                <widget class="QCheckBox" name="gs_disableKbHotkeys">
+                  <property name="text">
+                    <string>Ignore keyboard hotkeys</string>
+                  </property>
+                </widget>
               </item>
               <item>
                <widget class="QCheckBox" name="gs_showMouseInFullscreen">
