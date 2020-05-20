@@ -29,10 +29,12 @@ void ppubreak(const char *ins, breakpoint_type t, u64 addr, T val, ppu_thread& p
 	if (!g_breakpoint_handler->HasBreakpoint(vm::cast(addr, HERE), t, sizeof(T)))
 		return;
 
+	auto retaddr = ppu.dump_callstack_list()[0];
+
 	if (t == breakpoint_type::bp_mwrite)
-		ppu_log.error("BPMW: %s breakpoint writing 0x%x at 0x%x", ins, val, addr);
+		ppu_log.error("BPMW: %s breakpoint writing 0x%x at 0x%x lr=0x%x", ins, val, addr, retaddr);
 	else
-		ppu_log.error("BPMR: %s breakpoint reading 0x%x at 0x%x", ins, val, addr);
+		ppu_log.error("BPMR: %s breakpoint reading 0x%x at 0x%x lr=0x%x", ins, val, addr, retaddr);
 
 	if (!g_breakpoint_handler->IsBreakOnBPM())
 		return;
