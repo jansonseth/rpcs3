@@ -59,6 +59,8 @@ bool g_use_rtm;
 
 std::string g_cfg_defaults;
 
+atomic_t<u64> g_watchdog_hold_ctr{0};
+
 extern void ppu_load_exec(const ppu_exec_object&);
 extern void spu_load_exec(const spu_exec_object&);
 extern void ppu_initialize(const ppu_module&);
@@ -950,13 +952,32 @@ game_boot_result Emulator::Load(const std::string& title_id, bool add_only, bool
 			// Force LLVM recompiler
 			g_cfg.core.ppu_decoder.from_default();
 
-			// Workaround for analyser glitches
-			vm::falloc(0x10000, 0xf0000, vm::main);
+			// Force lib loading mode
+			g_cfg.core.lib_loading.from_string("Manually load selected libraries");
+			verify(HERE), g_cfg.core.lib_loading == lib_loading_type::manual;
+			g_cfg.core.load_libraries.from_default();
+
+			// Fake arg (workaround)
+			argv.resize(1);
+			argv[0] = "/dev_bdvd/PS3_GAME/USRDIR/EBOOT.BIN";
+			m_dir = "/dev_bdvd/PS3_GAME";
 
 			g_fxo->init<named_thread>("SPRX Loader"sv, [this]
 			{
 				std::vector<std::string> dir_queue;
 				dir_queue.emplace_back(m_path + '/');
+
+				// Find game update to use EBOOT.BIN from it, also add its directory to scan
+				if (m_cat == "DG")
+				{
+					const std::string hdd0_path = vfs::get("/dev_hdd0/game/") + m_title_id;
+
+					if (fs::is_file(hdd0_path + "/USRDIR/EBOOT.BIN"))
+					{
+						m_path = hdd0_path;
+						dir_queue.emplace_back(m_path + '/');
+					}
+				}
 
 				std::vector<std::pair<std::string, u64>> file_queue;
 				file_queue.reserve(2000);
@@ -1007,6 +1028,40 @@ game_boot_result Emulator::Load(const std::string& title_id, bool add_only, bool
 				}
 
 				g_progr = "Compiling PPU modules";
+
+				if (std::string path = m_path + "/USRDIR/EBOOT.BIN"; fs::is_file(path))
+				{
+					// Compile EBOOT.BIN first
+					sys_log.notice("Trying to load EBOOT.BIN: %s", path);
+
+					fs::file src{path};
+
+					src = decrypt_self(std::move(src));
+
+					const ppu_exec_object obj = src;
+
+					if (obj == elf_error::ok)
+					{
+						const auto _main = g_fxo->get<ppu_module>();
+
+						ppu_load_exec(obj);
+
+						_main->path = path;
+
+						ConfigurePPUCache();
+
+						ppu_initialize(*_main);
+					}
+					else
+					{
+						sys_log.error("Failed to load EBOOT.BIN '%s' (%s)", path, obj.get_error());
+					}
+				}
+				else
+				{
+					// Workaround for analyser glitches
+					verify(HERE), vm::falloc(0x10000, 0xf0000, vm::main);
+				}
 
 				atomic_t<std::size_t> fnext = 0;
 
@@ -1436,26 +1491,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool add_only, bool
 
 			ppu_load_exec(ppu_exec);
 
-			_main->cache = GetCacheDir();
-
-			if (!m_title_id.empty() && m_cat != "1P")
-			{
-				// TODO
-				_main->cache += Emu.GetTitleID();
-				_main->cache += '/';
-			}
-
-			fmt::append(_main->cache, "ppu-%s-%s/", fmt::base57(_main->sha1), _main->path.substr(_main->path.find_last_of('/') + 1));
-
-			if (!fs::create_path(_main->cache))
-			{
-				sys_log.error("Failed to create cache directory: %s (%s)", _main->cache, fs::g_tls_error);
-				return game_boot_result::file_creation_error;
-			}
-			else
-			{
-				sys_log.notice("Cache: %s", _main->cache);
-			}
+			ConfigurePPUCache();
 
 			g_fxo->init();
 			Emu.GetCallbacks().init_gs_render();
@@ -1676,7 +1712,7 @@ void Emulator::Stop(bool restart)
 
 	named_thread stop_watchdog("Stop Watchdog", [&]()
 	{
-		for (uint i = 0; thread_ctrl::state() != thread_state::aborting; i++)
+		for (uint i = 0; thread_ctrl::state() != thread_state::aborting;)
 		{
 			// We don't need accurate timekeeping, using clocks may interfere with debugging
 			if (i >= 1000)
@@ -1687,6 +1723,12 @@ void Emulator::Stop(bool restart)
 			}
 
 			thread_ctrl::wait_for(5'000);
+
+			if (!g_watchdog_hold_ctr)
+			{
+				// Don't count if there are still uninterruptable threads like PPU LLVM workers
+				i++;
+			}
 		}
 	});
 
@@ -1852,6 +1894,30 @@ void Emulator::ConfigureLogs()
 	}
 
 	was_silenced = silenced;
+}
+
+void Emulator::ConfigurePPUCache()
+{
+	const auto _main = g_fxo->get<ppu_module>();
+
+	_main->cache = GetCacheDir();
+
+	if (!m_title_id.empty() && m_cat != "1P")
+	{
+		_main->cache += Emu.GetTitleID();
+		_main->cache += '/';
+	}
+
+	fmt::append(_main->cache, "ppu-%s-%s/", fmt::base57(_main->sha1), _main->path.substr(_main->path.find_last_of('/') + 1));
+
+	if (!fs::create_path(_main->cache))
+	{
+		sys_log.error("Failed to create cache directory: %s (%s)", _main->cache, fs::g_tls_error);
+	}
+	else
+	{
+		sys_log.notice("Cache: %s", _main->cache);
+	}
 }
 
 template <>

@@ -94,6 +94,7 @@ namespace vk
 		VKFragmentProgram vk_prog;
 		VKFragmentDecompilerThread comp(shader_str, arr, frag, len, vk_prog);
 
+		const auto& binding_table = vk::get_current_renderer()->get_pipeline_binding_table();
 		std::stringstream builder;
 		builder <<
 		"#version 450\n"
@@ -157,6 +158,11 @@ namespace vk
 			builder << "#define WITH_KIL\n";
 		}
 
+		if (compiler_options & program_common::interpreter::COMPILER_OPT_ENABLE_STIPPLING)
+		{
+			builder << "#define WITH_STIPPLING\n";
+		}
+
 		const char* type_names[] = { "sampler1D", "sampler2D", "sampler3D", "samplerCube" };
 		if (compiler_options & program_common::interpreter::COMPILER_OPT_ENABLE_TEXTURES)
 		{
@@ -193,7 +199,6 @@ namespace vk
 		fs->compile();
 
 		// Prepare input table
-		const auto& binding_table = vk::get_current_renderer()->get_pipeline_binding_table();
 		vk::glsl::program_input in;
 		in.location = binding_table.fragment_constant_buffers_bind_slot;
 		in.domain = ::glsl::glsl_fragment_program;
@@ -276,6 +281,13 @@ namespace vk
 		bindings[idx].descriptorCount = 1;
 		bindings[idx].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 		bindings[idx].binding = binding_table.conditional_render_predicate_slot;
+
+		idx++;
+
+		bindings[idx].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		bindings[idx].descriptorCount = 1;
+		bindings[idx].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		bindings[idx].binding = binding_table.rasterizer_env_bind_slot;
 
 		idx++;
 
@@ -433,24 +445,25 @@ namespace vk
 		shader_stages[1].module = fs->get_handle();
 		shader_stages[1].pName = "main";
 
-		VkDynamicState dynamic_state_descriptors[VK_DYNAMIC_STATE_RANGE_SIZE] = {};
-		VkPipelineDynamicStateCreateInfo dynamic_state_info = {};
-		dynamic_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_VIEWPORT;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_SCISSOR;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_LINE_WIDTH;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_BLEND_CONSTANTS;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_STENCIL_WRITE_MASK;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_STENCIL_REFERENCE;
-		dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_DEPTH_BIAS;
+		std::vector<VkDynamicState> dynamic_state_descriptors;
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_VIEWPORT);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_SCISSOR);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_BLEND_CONSTANTS);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_STENCIL_WRITE_MASK);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_STENCIL_REFERENCE);
+		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
 
 		if (vk::get_current_renderer()->get_depth_bounds_support())
 		{
-			dynamic_state_descriptors[dynamic_state_info.dynamicStateCount++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS;
+			dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_DEPTH_BOUNDS);
 		}
 
-		dynamic_state_info.pDynamicStates = dynamic_state_descriptors;
+		VkPipelineDynamicStateCreateInfo dynamic_state_info = {};
+		dynamic_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+		dynamic_state_info.pDynamicStates = dynamic_state_descriptors.data();
+		dynamic_state_info.dynamicStateCount = ::size32(dynamic_state_descriptors);
 
 		VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 
@@ -578,6 +591,7 @@ namespace vk
 		if (metadata.referenced_textures_mask) key.compiler_opt |= program_common::interpreter::COMPILER_OPT_ENABLE_TEXTURES;
 		if (metadata.has_branch_instructions) key.compiler_opt |= program_common::interpreter::COMPILER_OPT_ENABLE_FLOW_CTRL;
 		if (metadata.has_pack_instructions) key.compiler_opt |= program_common::interpreter::COMPILER_OPT_ENABLE_PACKING;
+		if (rsx::method_registers.polygon_stipple_enabled()) key.compiler_opt |= program_common::interpreter::COMPILER_OPT_ENABLE_STIPPLING;
 
 		if (m_current_key == key) [[likely]]
 		{

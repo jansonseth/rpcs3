@@ -66,6 +66,8 @@ const bool s_use_ssse3 = utils::has_ssse3();
 
 extern u64 get_guest_system_time();
 
+extern atomic_t<u64> g_watchdog_hold_ctr;
+
 extern atomic_t<const char*> g_progr;
 extern atomic_t<u32> g_progr_ptotal;
 extern atomic_t<u32> g_progr_pdone;
@@ -998,10 +1000,21 @@ extern __m128i sse_cellbe_lvrx_v0(u64 addr);
 extern void sse_cellbe_stvlx_v0(u64 addr, __m128i a);
 extern void sse_cellbe_stvrx_v0(u64 addr, __m128i a);
 
-[[noreturn]] static void ppu_trap(ppu_thread& ppu, u64 addr)
+void ppu_trap(ppu_thread& ppu, u64 addr)
 {
-	ppu.cia = ::narrow<u32>(addr);
-	fmt::throw_exception("Trap! (0x%llx)", addr);
+	verify(HERE), (addr & (~u64{UINT32_MAX} | 0x3)) == 0;
+	ppu.cia = static_cast<u32>(addr);
+
+	u32 add = static_cast<u32>(g_cfg.core.stub_ppu_traps) * 4;
+
+	// If stubbing is enabled, check current instruction and the following
+	if (!add || !vm::check_addr(ppu.cia, 4, vm::page_executable) || !vm::check_addr(ppu.cia + add, 4, vm::page_executable))
+	{
+		fmt::throw_exception("PPU Trap!" HERE);
+	}
+
+	ppu_log.error("PPU Trap: Stubbing %d instructions %s.", std::abs(static_cast<s32>(add) / 4), add >> 31 ? "backwards" : "forwards");
+	ppu.cia += add; // Skip instructions, hope for valid code (interprter may be invoked temporarily)
 }
 
 [[noreturn]] static void ppu_error(ppu_thread& ppu, u64 addr, u32 op)
@@ -1063,20 +1076,6 @@ static T ppu_load_acquire_reservation(ppu_thread& ppu, u32 addr)
 		}
 	}
 
-	ppu.rtime = vm::reservation_acquire(addr, sizeof(T));
-
-	if ((ppu.rtime & 127) == 0) [[likely]]
-	{
-		ppu.rdata = data;
-
-		if (vm::reservation_acquire(addr, sizeof(T)) == ppu.rtime) [[likely]]
-		{
-			return static_cast<T>(ppu.rdata << data_off >> size_off);
-		}
-	}
-
-	vm::passive_unlock(ppu);
-
 	for (u64 i = 0;; i++)
 	{
 		ppu.rtime = vm::reservation_acquire(addr, sizeof(T));
@@ -1091,17 +1090,22 @@ static T ppu_load_acquire_reservation(ppu_thread& ppu, u32 addr)
 			}
 		}
 
-		if (i < 20)
+		if (ppu.state)
+		{
+			ppu.check_state();
+		}
+		else if (i < 20)
 		{
 			busy_wait(300);
 		}
 		else
 		{
+			ppu.state += cpu_flag::wait;
 			std::this_thread::yield();
+			ppu.check_state();
 		}
 	}
 
-	vm::passive_lock(ppu);
 	return static_cast<T>(ppu.rdata << data_off >> size_off);
 }
 
@@ -1214,10 +1218,21 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, T reg_value)
 	constexpr u64 size_off = (sizeof(T) * 8) & 63;
 
 	const T old_data = static_cast<T>(ppu.rdata << ((addr & 7) * 8) >> size_off);
+	auto& res = vm::reservation_acquire(addr, sizeof(T));
 
-	if (ppu.raddr != addr || addr % sizeof(T) || old_data != data.load() || ppu.rtime != (vm::reservation_acquire(addr, sizeof(T)) & -128))
+	if (std::exchange(ppu.raddr, 0) != addr || addr % sizeof(T) || old_data != data || ppu.rtime != res)
 	{
-		ppu.raddr = 0;
+		return false;
+	}
+
+	if (reg_value == old_data)
+	{
+		if (res.compare_and_swap_test(ppu.rtime, ppu.rtime + 128))
+		{
+			res.notify_all();
+			return true;
+		}
+
 		return false;
 	}
 
@@ -1230,27 +1245,21 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, T reg_value)
 		case 0:
 		{
 			// Reservation lost
-			ppu.raddr = 0;
 			return false;
 		}
 		case 1:
 		{
-			vm::reservation_notifier(addr, sizeof(T)).notify_all();
-			ppu.raddr = 0;
+			res.notify_all();
 			return true;
 		}
 		}
 
-		auto& res = vm::reservation_acquire(addr, sizeof(T));
-
-		ppu.raddr = 0;
-
-		if (res == ppu.rtime && res.compare_and_swap_test(ppu.rtime, ppu.rtime | 1))
+		if (res == ppu.rtime && vm::reservation_trylock(res, ppu.rtime))
 		{
 			if (data.compare_and_swap_test(old_data, reg_value))
 			{
 				res += 127;
-				vm::reservation_notifier(addr, sizeof(T)).notify_all();
+				res.notify_all();
 				return true;
 			}
 
@@ -1260,25 +1269,23 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, T reg_value)
 		return false;
 	}
 
-	vm::passive_unlock(ppu);
+	if (!vm::reservation_trylock(res, ppu.rtime))
+	{
+		return false;
+	}
 
-	auto& res = vm::reservation_lock(addr, sizeof(T));
-	const u64 old_time = res.load() & -128;
-
-	const bool result = ppu.rtime == old_time && data.compare_and_swap_test(old_data, reg_value);
+	const bool result = data.compare_and_swap_test(old_data, reg_value);
 
 	if (result)
 	{
-		res.release(old_time + 128);
-		vm::reservation_notifier(addr, sizeof(T)).notify_all();
+		res.release(ppu.rtime + 128);
+		res.notify_all();
 	}
 	else
 	{
-		res.release(old_time);
+		res.release(ppu.rtime);
 	}
 
-	vm::passive_lock(ppu);
-	ppu.raddr = 0;
 	return result;
 }
 
@@ -1598,6 +1605,7 @@ extern void ppu_initialize(const ppu_module& info)
 			{
 				non_win32,
 				accurate_fma,
+				accurate_ppu_vector_nan,
 
 				__bitset_enum_max
 			};
@@ -1610,6 +1618,10 @@ extern void ppu_initialize(const ppu_module& info)
 			if (g_cfg.core.llvm_accurate_dfma)
 			{
 				settings += ppu_settings::accurate_fma;
+			}
+			if (g_cfg.core.llvm_ppu_accurate_vector_nan)
+			{
+				settings += ppu_settings::accurate_ppu_vector_nan;
 			}
 
 			// Write version, hash, CPU, settings
@@ -1668,6 +1680,9 @@ extern void ppu_initialize(const ppu_module& info)
 			atomic_t<u64> index = 0;
 		};
 
+		// Prevent watchdog thread from terminating
+		g_watchdog_hold_ctr++;
+
 		named_thread_group threads(fmt::format("PPUW.%u.", ++g_fxo->get<thread_index_allocator>()->index), thread_count, [&]()
 		{
 			// Set low priority
@@ -1697,6 +1712,8 @@ extern void ppu_initialize(const ppu_module& info)
 		});
 
 		threads.join();
+
+		g_watchdog_hold_ctr--;
 
 		if (Emu.IsStopped() || !get_current_cpu_thread())
 		{
@@ -1875,7 +1892,7 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module& module_part, co
 			}
 		}
 
-		legacy::PassManager mpm;
+		//legacy::PassManager mpm;
 
 		// Remove unused functions, structs, global variables, etc
 		//mpm.add(createStripDeadPrototypesPass());

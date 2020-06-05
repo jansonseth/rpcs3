@@ -229,15 +229,18 @@ error_code sys_semaphore_post(ppu_thread& ppu, u32 sem_id, s32 count)
 	{
 		std::lock_guard lock(sem->mutex);
 
-		const s32 val = sem->val.fetch_op([=](s32& val)
+		const auto [val, ok] = sem->val.fetch_op([&](s32& val)
 		{
-			if (val + s64{count} <= sem->max)
+			if (count + 0u <= sem->max + 0u - val)
 			{
 				val += count;
+				return true;
 			}
+
+			return false;
 		});
 
-		if (val + s64{count} > sem->max)
+		if (!ok)
 		{
 			return not_an_error(CELL_EBUSY);
 		}
@@ -265,11 +268,6 @@ error_code sys_semaphore_get_value(ppu_thread& ppu, u32 sem_id, vm::ptr<s32> cou
 
 	sys_semaphore.trace("sys_semaphore_get_value(sem_id=0x%x, count=*0x%x)", sem_id, count);
 
-	if (!count)
-	{
-		return CELL_EFAULT;
-	}
-
 	const auto sema = idm::check<lv2_obj, lv2_sema>(sem_id, [](lv2_sema& sema)
 	{
 		return std::max<s32>(0, sema.val);
@@ -278,6 +276,11 @@ error_code sys_semaphore_get_value(ppu_thread& ppu, u32 sem_id, vm::ptr<s32> cou
 	if (!sema)
 	{
 		return CELL_ESRCH;
+	}
+
+	if (!count)
+	{
+		return CELL_EFAULT;
 	}
 
 	*count = sema.ret;

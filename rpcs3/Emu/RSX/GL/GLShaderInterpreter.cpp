@@ -12,16 +12,16 @@ namespace gl
 
 	namespace interpreter
 	{
-		void texture_pool_allocator::create(shader::type domain)
+		void texture_pool_allocator::create(::glsl::program_domain domain)
 		{
 			GLenum pname;
 			switch (domain)
 			{
 			default:
 				rsx_log.fatal("Unexpected program domain %d", static_cast<int>(domain));
-			case shader::type::vertex:
+			case ::glsl::program_domain::glsl_vertex_program:
 				pname = GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS; break;
-			case shader::type::fragment:
+			case ::glsl::program_domain::glsl_fragment_program:
 				pname = GL_MAX_TEXTURE_IMAGE_UNITS; break;
 			}
 
@@ -99,6 +99,7 @@ namespace gl
 		if (metadata.referenced_textures_mask) opt |= program_common::interpreter::COMPILER_OPT_ENABLE_TEXTURES;
 		if (metadata.has_branch_instructions) opt |= program_common::interpreter::COMPILER_OPT_ENABLE_FLOW_CTRL;
 		if (metadata.has_pack_instructions) opt |= program_common::interpreter::COMPILER_OPT_ENABLE_PACKING;
+		if (rsx::method_registers.polygon_stipple_enabled()) opt |= program_common::interpreter::COMPILER_OPT_ENABLE_STIPPLING;
 
 		if (auto it = m_program_cache.find(opt); it != m_program_cache.end()) [[likely]]
 		{
@@ -150,8 +151,7 @@ namespace gl
 		builder << program_common::interpreter::get_vertex_interpreter();
 		const std::string s = builder.str();
 
-		m_vs.create(glsl::shader::type::vertex);
-		m_vs.source(s);
+		m_vs.create(::glsl::program_domain::glsl_vertex_program, s);
 		m_vs.compile();
 	}
 
@@ -161,7 +161,7 @@ namespace gl
 		auto& allocator = prog_data.allocator;
 		if (compiler_options & program_common::interpreter::COMPILER_OPT_ENABLE_TEXTURES)
 		{
-			allocator.create(glsl::shader::type::fragment);
+			allocator.create(::glsl::program_domain::glsl_fragment_program);
 			if (allocator.max_image_units >= 32)
 			{
 				// 16 + 4 + 4 + 4
@@ -267,6 +267,11 @@ namespace gl
 			builder << "#define WITH_KIL\n";
 		}
 
+		if (compiler_options & program_common::interpreter::COMPILER_OPT_ENABLE_STIPPLING)
+		{
+			builder << "#define WITH_STIPPLING\n";
+		}
+
 		if (compiler_options & program_common::interpreter::COMPILER_OPT_ENABLE_TEXTURES)
 		{
 			builder << "#define WITH_TEXTURES\n\n";
@@ -303,8 +308,7 @@ namespace gl
 		builder << program_common::interpreter::get_fragment_interpreter();
 		const std::string s = builder.str();
 
-		prog_data.fs.create(glsl::shader::type::fragment);
-		prog_data.fs.source(s);
+		prog_data.fs.create(::glsl::program_domain::glsl_fragment_program, s);
 		prog_data.fs.compile();
 	}
 

@@ -58,6 +58,7 @@ enum spu_group_status : u32
 	SPU_THREAD_GROUP_STATUS_WAITING_AND_SUSPENDED,
 	SPU_THREAD_GROUP_STATUS_RUNNING,
 	SPU_THREAD_GROUP_STATUS_STOPPED,
+	SPU_THREAD_GROUP_STATUS_DESTROYED, // Internal state
 	SPU_THREAD_GROUP_STATUS_UNKNOWN,
 };
 
@@ -66,6 +67,16 @@ enum : s32
 	SYS_SPU_SEGMENT_TYPE_COPY = 1,
 	SYS_SPU_SEGMENT_TYPE_FILL = 2,
 	SYS_SPU_SEGMENT_TYPE_INFO = 4,
+};
+
+enum : u32
+{
+	SYS_SPU_THREAD_STOP_YIELD                = 0x0100,
+	SYS_SPU_THREAD_STOP_GROUP_EXIT           = 0x0101,
+	SYS_SPU_THREAD_STOP_THREAD_EXIT          = 0x0102,
+	SYS_SPU_THREAD_STOP_RECEIVE_EVENT        = 0x0110,
+	SYS_SPU_THREAD_STOP_TRY_RECEIVE_EVENT    = 0x0111,
+	SYS_SPU_THREAD_STOP_SWITCH_SYSTEM_MODULE = 0x0120,
 };
 
 struct sys_spu_thread_group_attribute
@@ -249,6 +260,7 @@ struct lv2_spu_group
 	static const u32 id_base = 0x04000100;
 	static const u32 id_step = 0x100;
 	static const u32 id_count = 255;
+	static constexpr std::pair<u32, u32> id_invl_range = {0, 8};
 
 	const std::string name;
 	const u32 id;
@@ -267,7 +279,6 @@ struct lv2_spu_group
 	atomic_t<s32> exit_status; // SPU Thread Group Exit Status
 	atomic_t<u32> join_state; // flags used to detect exit cause and signal
 	atomic_t<u32> running; // Number of running threads
-	cond_variable cond; // used to signal waiting PPU thread
 	atomic_t<u64> stop_count;
 	class ppu_thread* waiter = nullptr;
 	bool set_terminate = false;
@@ -367,7 +378,7 @@ error_code sys_spu_thread_connect_event(ppu_thread&, u32 id, u32 eq, u32 et, u8 
 error_code sys_spu_thread_disconnect_event(ppu_thread&, u32 id, u32 event_type, u8 spup);
 error_code sys_spu_thread_bind_queue(ppu_thread&, u32 id, u32 spuq, u32 spuq_num);
 error_code sys_spu_thread_unbind_queue(ppu_thread&, u32 id, u32 spuq_num);
-error_code sys_spu_thread_get_exit_status(ppu_thread&, u32 id, vm::ptr<u32> status);
+error_code sys_spu_thread_get_exit_status(ppu_thread&, u32 id, vm::ptr<s32> status);
 error_code sys_spu_thread_recover_page_fault(ppu_thread&, u32 id);
 
 error_code sys_raw_spu_create(ppu_thread&, vm::ptr<u32> id, vm::ptr<void> attr);

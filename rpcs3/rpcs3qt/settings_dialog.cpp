@@ -231,6 +231,8 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		ui->enableTSX->setEnabled(false);
 		ui->enableTSX->addItem(tr("Not supported", "Enable TSX"));
 		SubscribeTooltip(ui->enableTSX, tr("Unfortunately your CPU model does not support this instruction set.", "Enable TSX"));
+
+		m_emu_settings->SetSetting(emu_settings_type::EnableTSX, fmt::format("%s", tsx_usage::disabled));
 	}
 
 	// PPU tool tips
@@ -406,14 +408,15 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	});
 	ui->disableVertexCache->setEnabled(!ui->multithreadedRSX->isChecked());
 
-	m_emu_settings->EnhanceCheckBox(ui->scrictModeRendering, emu_settings_type::StrictRenderingMode);
-	SubscribeTooltip(ui->scrictModeRendering, tooltips.settings.strict_rendering_mode);
-	connect(ui->scrictModeRendering, &QCheckBox::clicked, [this](bool checked)
+	m_emu_settings->EnhanceCheckBox(ui->strictModeRendering, emu_settings_type::StrictRenderingMode);
+	SubscribeTooltip(ui->strictModeRendering, tooltips.settings.strict_rendering_mode);
+	const auto onStrictRenderingMode = [this](bool checked)
 	{
 		ui->gb_resolutionScale->setEnabled(!checked);
 		ui->gb_minimumScalableDimension->setEnabled(!checked);
 		ui->gb_anisotropicFilter->setEnabled(!checked);
-	});
+	};
+	connect(ui->strictModeRendering, &QCheckBox::clicked, this, onStrictRenderingMode);
 
 	// Radio buttons
 	
@@ -434,7 +437,6 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceSlider(ui->resolutionScale, emu_settings_type::ResolutionScale);
 	SubscribeTooltip(ui->gb_resolutionScale, tooltips.settings.resolution_scale);
-	ui->gb_resolutionScale->setEnabled(!ui->scrictModeRendering->isChecked());
 	// rename label texts to fit current state of Resolution Scale
 	const int resolution_scale_def = stoi(m_emu_settings->GetSettingDefault(emu_settings_type::ResolutionScale));
 	auto scaled_resolution = [resolution_scale_def](int percentage)
@@ -463,7 +465,6 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 	m_emu_settings->EnhanceSlider(ui->minimumScalableDimension, emu_settings_type::MinimumScalableDimension);
 	SubscribeTooltip(ui->gb_minimumScalableDimension, tooltips.settings.minimum_scalable_dimension);
-	ui->gb_minimumScalableDimension->setEnabled(!ui->scrictModeRendering->isChecked());
 	// rename label texts to fit current state of Minimum Scalable Dimension
 	const int minimum_scalable_dimension_def = stoi(m_emu_settings->GetSettingDefault(emu_settings_type::MinimumScalableDimension));
 	auto min_scalable_dimension = [minimum_scalable_dimension_def](int dim)
@@ -616,6 +617,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	};
 
 	// Handle connects to disable specific checkboxes that depend on GUI state.
+	onStrictRenderingMode(ui->strictModeRendering->isChecked());
 	fix_gl_legacy(ui->renderBox->currentText()); // Init
 	connect(ui->renderBox, &QComboBox::currentTextChanged, fix_gl_legacy);
 
@@ -929,6 +931,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	m_emu_settings->EnhanceCheckBox(ui->accurateLLVMdfma, emu_settings_type::AccurateLLVMdfma);
 	SubscribeTooltip(ui->accurateLLVMdfma, tooltips.settings.accurate_llvm_dfma);
 	ui->accurateLLVMdfma->setDisabled(utils::has_fma3() || utils::has_fma4());
+
+	m_emu_settings->EnhanceCheckBox(ui->AccurateVectorNaN, emu_settings_type::AccurateVectorNaN);
+	SubscribeTooltip(ui->AccurateVectorNaN, tooltips.settings.accurate_vector_nan);
 
 	m_emu_settings->EnhanceCheckBox(ui->silenceAllLogs, emu_settings_type::SilenceAllLogs);
 	SubscribeTooltip(ui->silenceAllLogs, tooltips.settings.silence_all_logs);

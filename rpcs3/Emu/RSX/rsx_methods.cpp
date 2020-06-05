@@ -55,7 +55,7 @@ namespace rsx
 			rsx->sync_point_request.release(true);
 			const u32 addr = get_address(method_registers.semaphore_offset_406e(), method_registers.semaphore_context_dma_406e(), HERE);
 
-			const auto& sema = vm::_ref<atomic_be_t<u32>>(addr);
+			const auto& sema = vm::_ref<RsxSemaphore>(addr).val;
 
 			// TODO: Remove vblank semaphore hack
 			if (addr == rsx->device_addr + 0x30) return;
@@ -127,6 +127,13 @@ namespace rsx
 			rsx->sync();
 
 			const u32 offset = method_registers.semaphore_offset_406e();
+
+			if (offset % 4)
+			{
+				rsx_log.warning("NV406E semaphore release is using unaligned semaphore, ignoring. (offset=0x%x)", offset);
+				return;
+			}
+
 			const u32 ctxt = method_registers.semaphore_context_dma_406e();
 
 			// By avoiding doing this on flip's semaphore release
@@ -139,15 +146,19 @@ namespace rsx
 
 			const u32 addr = get_address(offset, ctxt, HERE);
 
-			if (g_use_rtm) [[likely]]
+			atomic_t<u64>* res{};
+
+			// TODO: Check if possible to write on reservations
+			if (!g_use_rtm && rsx->label_addr >> 28 != addr >> 28) [[likely]]
 			{
-				vm::_ref<atomic_be_t<u32>>(addr) = arg;
+				res = &vm::reservation_lock(addr, 4);
 			}
-			else
+
+			vm::_ref<RsxSemaphore>(addr).val = arg;
+
+			if (res)
 			{
-				auto& res = vm::reservation_lock(addr, 4);
-				vm::write32(addr, arg);
-				res &= -128;
+				res->release(*res & -128);
 			}
 
 			vm::reservation_notifier(addr, 4).notify_all();
@@ -221,13 +232,16 @@ namespace rsx
 
 			// lle-gcm likes to inject system reserved semaphores, presumably for system/vsh usage
 			// Avoid calling render to avoid any havoc(flickering) they may cause from invalid flush/write
-			const u32 offset = method_registers.semaphore_offset_4097() & -16;
-			vm::_ref<atomic_t<RsxSemaphore>>(get_address(offset, method_registers.semaphore_context_dma_4097(), HERE)).store(
+			const u32 offset = method_registers.semaphore_offset_4097();
+
+			if (offset % 16)
 			{
-				arg,
-				0,
-				rsx->timestamp()
-			});
+				rsx_log.error("NV4097 semaphore using unaligned offset, recovering. (offset=0x%x)", offset);
+				rsx->recover_fifo();
+				return;
+			}
+
+			vm::_ref<RsxSemaphore>(get_address(offset, method_registers.semaphore_context_dma_4097(), HERE)).val = arg;
 		}
 
 		void back_end_write_semaphore_release(thread* rsx, u32 _reg, u32 arg)
@@ -236,14 +250,17 @@ namespace rsx
 			g_fxo->get<rsx::dma_manager>()->sync();
 			rsx->sync();
 
-			const u32 offset = method_registers.semaphore_offset_4097() & -16;
-			const u32 val = (arg & 0xff00ff00) | ((arg & 0xff) << 16) | ((arg >> 16) & 0xff);
-			vm::_ref<atomic_t<RsxSemaphore>>(get_address(offset, method_registers.semaphore_context_dma_4097(), HERE)).store(
+			const u32 offset = method_registers.semaphore_offset_4097();
+
+			if (offset % 16)
 			{
-				val,
-				0,
-				rsx->timestamp()
-			});
+				rsx_log.error("NV4097 semaphore using unaligned offset, recovering. (offset=0x%x)", offset);
+				rsx->recover_fifo();
+				return;
+			}
+
+			const u32 val = (arg & 0xff00ff00) | ((arg & 0xff) << 16) | ((arg >> 16) & 0xff);
+			vm::_ref<RsxSemaphore>(get_address(offset, method_registers.semaphore_context_dma_4097(), HERE)).val = val;
 		}
 
 		/**
@@ -963,11 +980,6 @@ namespace rsx
 			const f32 scale_x = method_registers.blit_engine_ds_dx();
 			const f32 scale_y = method_registers.blit_engine_dt_dy();
 
-			// NOTE: Do not round these value up!
-			// Sub-pixel offsets are used to signify pixel centers and do not mean to read from the next block (fill convention)
-			auto in_x = static_cast<u16>(std::floor(method_registers.blit_engine_in_x()));
-			auto in_y = static_cast<u16>(std::floor(method_registers.blit_engine_in_y()));
-
 			// Clipping
 			// Validate that clipping rect will fit onto both src and dst regions
 			const u16 clip_w = std::min(method_registers.blit_engine_clip_width(), out_w);
@@ -1051,24 +1063,37 @@ namespace rsx
 				out_pitch = out_bpp * out_w;
 			}
 
-			if (in_x == 1 || in_y == 1) [[unlikely]]
+			if (in_bpp != out_bpp)
 			{
-				if (is_block_transfer && in_bpp == out_bpp)
-				{
-					// No scaling factor, so size in src == size in dst
-					// Check for texel wrapping where (offset + size) > size by 1 pixel
-					// TODO: Should properly RE this behaviour when I have time (kd-11)
-					if (in_x == 1 && in_w == clip_w) in_x = 0;
-					if (in_y == 1 && in_h == clip_h) in_y = 0;
-				}
-				else
-				{
-					// Graphics operation, ignore subpixel correction offsets
-					if (in_x == 1) in_x = 0;
-					if (in_y == 1) in_y = 0;
+				is_block_transfer = false;
+			}
 
-					is_block_transfer = false;
-				}
+			u16 in_x, in_y;
+			if (in_origin == blit_engine::transfer_origin::center)
+			{
+				// Convert to normal u,v addressing. Under this scheme offset of 1 is actually half-way inside pixel 0
+				const float x = std::max(method_registers.blit_engine_in_x(), 0.5f);
+				const float y = std::max(method_registers.blit_engine_in_y(), 0.5f);
+				in_x = static_cast<u16>(std::floor(x - 0.5f));
+				in_y = static_cast<u16>(std::floor(y - 0.5f));
+			}
+			else
+			{
+				in_x = static_cast<u16>(std::floor(method_registers.blit_engine_in_x()));
+				in_y = static_cast<u16>(std::floor(method_registers.blit_engine_in_y()));
+			}
+
+			// Check for subpixel addressing
+			if (scale_x < 1.f)
+			{
+				float dst_x = in_x * scale_x;
+				in_x = static_cast<u16>(std::floor(dst_x) / scale_x);
+			}
+
+			if (scale_y < 1.f)
+			{
+				float dst_y = in_y * scale_y;
+				in_y = static_cast<u16>(std::floor(dst_y) / scale_y);
 			}
 
 			const u32 in_offset = in_x * in_bpp + in_pitch * in_y;
@@ -3095,6 +3120,8 @@ namespace rsx
 		bind_range<NV4097_SET_VIEWPORT_OFFSET, 1, 3, nv4097::set_viewport_dirty_bit>();
 		bind<NV4097_SET_INDEX_ARRAY_DMA, nv4097::check_index_array_dma>();
 		bind<NV4097_SET_BLEND_EQUATION, nv4097::set_blend_equation>();
+		bind<NV4097_SET_POLYGON_STIPPLE, nv4097::notify_state_changed<fragment_state_dirty>>();
+		bind_array<NV4097_SET_POLYGON_STIPPLE_PATTERN, 1, 32, nv4097::notify_state_changed<polygon_stipple_pattern_dirty>>();
 
 		//NV308A (0xa400..0xbffc!)
 		bind_range<NV308A_COLOR + (256 * 0), 1, 256, nv308a::color, 256 * 0>();

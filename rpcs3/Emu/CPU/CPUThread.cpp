@@ -332,14 +332,13 @@ void cpu_thread::operator()()
 	{
 		thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(id_type() == 1 ? thread_class::ppu : thread_class::spu));
 	}
-
-	if (g_cfg.core.lower_spu_priority && id_type() == 2)
-	{
-		thread_ctrl::set_native_priority(-1);
-	}
-
 	if (id_type() == 2)
 	{
+		if (g_cfg.core.lower_spu_priority)
+		{
+			thread_ctrl::set_native_priority(-1);
+		}
+	
 		// force input/output denormals to zero for SPU threads (FTZ/DAZ)
 		_mm_setcsr( _mm_getcsr() | 0x8040 );
 
@@ -466,6 +465,7 @@ bool cpu_thread::check_state() noexcept
 
 	bool cpu_sleep_called = false;
 	bool cpu_flag_memory = false;
+	bool escape, retval;
 
 	if (!(state & cpu_flag::wait))
 	{
@@ -474,54 +474,73 @@ bool cpu_thread::check_state() noexcept
 
 	while (true)
 	{
-		if (state & cpu_flag::memory)
+		// Process all flags in a single atomic op
+		const auto state0 = state.fetch_op([&](bs_t<cpu_flag>& flags)
 		{
-			if (auto& ptr = vm::g_tls_locked)
+			bool store = false;
+
+			if (flags & cpu_flag::signal)
 			{
-				ptr->compare_and_swap(this, nullptr);
-				ptr = nullptr;
+				flags -= cpu_flag::signal;
+				cpu_sleep_called = false;
+				store = true;
 			}
 
-			cpu_flag_memory = true;
-			state -= cpu_flag::memory;
-		}
-
-		if (state & (cpu_flag::exit + cpu_flag::dbg_global_stop))
-		{
-			state += cpu_flag::wait;
-			return true;
-		}
-
-		const auto [state0, escape] = state.fetch_op([&](bs_t<cpu_flag>& flags)
-		{
 			// Atomically clean wait flag and escape
 			if (!(flags & (cpu_flag::exit + cpu_flag::dbg_global_stop + cpu_flag::ret + cpu_flag::stop)))
 			{
 				// Check pause flags which hold thread inside check_state
 				if (flags & (cpu_flag::pause + cpu_flag::suspend + cpu_flag::dbg_global_pause + cpu_flag::dbg_pause))
 				{
-					return false;
+					escape = false;
+					return store;
 				}
 
-				flags -= cpu_flag::wait;
+				if (flags & cpu_flag::memory)
+				{
+					// wait flag will be cleared later (optimization)
+					cpu_flag_memory = true;
+				}
+				else
+				{
+					AUDIT(!cpu_flag_memory);
+					flags -= cpu_flag::wait;
+					store = true;
+				}
+
+				retval = false;
+			}
+			else
+			{
+				cpu_flag_memory = false;
+				retval = true;
 			}
 
-			return true;
-		});
+			if (flags & cpu_flag::dbg_step)
+			{
+				flags += cpu_flag::dbg_pause;
+				flags -= cpu_flag::dbg_step;
+				store = true;
+			}
 
-		if (state & cpu_flag::signal && state.test_and_reset(cpu_flag::signal))
-		{
-			cpu_sleep_called = false;
-		}
+			escape = true;
+			return store;
+		}).first;
 
 		if (escape)
 		{
 			if (cpu_flag_memory)
 			{
 				cpu_mem();
+
+				if (state & (cpu_flag::pause + cpu_flag::memory)) [[unlikely]]
+				{
+					state += cpu_flag::wait;
+					continue;
+				}
 			}
 
-			break;
+			return retval;
 		}
 		else if (!cpu_sleep_called && state0 & cpu_flag::suspend)
 		{
@@ -540,21 +559,6 @@ bool cpu_thread::check_state() noexcept
 			g_fxo->get<cpu_counter>()->cpu_suspend_lock.lock_unlock();
 		}
 	}
-
-	const auto state_ = state.load();
-
-	if (state_ & (cpu_flag::ret + cpu_flag::stop))
-	{
-		return true;
-	}
-
-	if (state_ & cpu_flag::dbg_step)
-	{
-		state += cpu_flag::dbg_pause;
-		state -= cpu_flag::dbg_step;
-	}
-
-	return false;
 }
 
 void cpu_thread::notify()
