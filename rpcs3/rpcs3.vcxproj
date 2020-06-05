@@ -88,8 +88,8 @@
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Release - LLVM|x64'">$(SolutionDir)bin\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\</IntDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release - LLVM|x64'">$(Platform)\$(Configuration)\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">rpcs3</TargetName>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release - LLVM|x64'">rpcs3</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">rpcs3_dbg</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release - LLVM|x64'">rpcs3_dbg</TargetName>
     <IgnoreImportLibrary Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</IgnoreImportLibrary>
     <IgnoreImportLibrary Condition="'$(Configuration)|$(Platform)'=='Release - LLVM|x64'">true</IgnoreImportLibrary>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
@@ -98,8 +98,8 @@
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">$(SolutionDir)bin\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\</IntDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">$(Platform)\$(Configuration)\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">rpcs3d</TargetName>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">rpcs3d</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">rpcs3d_dbg</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">rpcs3d_dbg</TargetName>
     <IgnoreImportLibrary Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</IgnoreImportLibrary>
     <IgnoreImportLibrary Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">true</IgnoreImportLibrary>
   </PropertyGroup>
@@ -145,7 +145,7 @@
       <GenerateDebugInformation>Debug</GenerateDebugInformation>
       <IgnoreImportLibrary>true</IgnoreImportLibrary>
       <LinkIncremental>false</LinkIncremental>
-      <OutputFile>$(OutDir)\rpcs3.exe</OutputFile>
+      <OutputFile>$(OutDir)\rpcs3_dbg.exe</OutputFile>
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <SubSystem>Windows</SubSystem>
       <SuppressStartupBanner>true</SuppressStartupBanner>
@@ -196,7 +196,7 @@
       <GenerateDebugInformation>Debug</GenerateDebugInformation>
       <IgnoreImportLibrary>true</IgnoreImportLibrary>
       <LinkIncremental>false</LinkIncremental>
-      <OutputFile>$(OutDir)\rpcs3.exe</OutputFile>
+      <OutputFile>$(OutDir)\rpcs3_dbg.exe</OutputFile>
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <SubSystem>Windows</SubSystem>
       <SuppressStartupBanner>true</SuppressStartupBanner>
@@ -246,7 +246,7 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
       <GenerateDebugInformation>Debug</GenerateDebugInformation>
       <IgnoreImportLibrary>true</IgnoreImportLibrary>
-      <OutputFile>$(OutDir)\rpcs3d.exe</OutputFile>
+      <OutputFile>$(OutDir)\rpcs3d_dbg.exe</OutputFile>
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <SubSystem>Windows</SubSystem>
       <SuppressStartupBanner>true</SuppressStartupBanner>
@@ -299,7 +299,7 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
       <GenerateDebugInformation>Debug</GenerateDebugInformation>
       <IgnoreImportLibrary>true</IgnoreImportLibrary>
-      <OutputFile>$(OutDir)\rpcs3d.exe</OutputFile>
+      <OutputFile>$(OutDir)\rpcs3d_dbg.exe</OutputFile>
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <SubSystem>Windows</SubSystem>
       <SuppressStartupBanner>true</SuppressStartupBanner>
