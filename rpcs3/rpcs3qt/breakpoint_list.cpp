@@ -6,6 +6,7 @@
 #include "Emu/Cell/PPUThread.h"
 
 #include <QMenu>
+#include <QTextEdit>
 
 constexpr auto qstr = QString::fromStdString;
 
@@ -138,7 +139,7 @@ void breakpoint_list::OnBreakpointListRightClicked(const QPoint &pos)
 		menu->addSeparator();
 	}
 
-	QAction* m_addbp = new QAction(tr("Add Breakpoint"), this);
+	QAction* m_addbp = new QAction(tr("Add Breakpoints"), this);
 	addAction(m_addbp);
 	connect(m_addbp, &QAction::triggered, this, &breakpoint_list::ShowAddBreakpointWindow);
 	menu->addAction(m_addbp);
@@ -169,15 +170,16 @@ void breakpoint_list::ShowAddBreakpointWindow()
 {
 	QDialog* diag = new QDialog(this);
 
-	diag->setWindowTitle(tr("Add a breakpoint"));
+	diag->setWindowTitle(tr("Add breakpoints"));
 	diag->setModal(true);
 
 	QVBoxLayout *vbox_panel = new QVBoxLayout();
 
 	QHBoxLayout *hbox_top = new QHBoxLayout();
-	QLabel *l_address = new QLabel(tr("Address"));
-	QLineEdit *t_address = new QLineEdit();
-	t_address->setPlaceholderText("Address here");
+	QLabel *l_address = new QLabel(tr("Addresses"));
+	QTextEdit* t_address = new QTextEdit(this);
+	t_address->setAcceptRichText(false);
+	t_address->setPlaceholderText("Addresses here");
 	t_address->setFocus();
 
 	hbox_top->addWidget(l_address);
@@ -210,34 +212,36 @@ void breakpoint_list::ShowAddBreakpointWindow()
 	diag->move(QCursor::pos());
 
 	
-	if (diag->exec() == QDialog::Accepted && !t_address->text().isEmpty())
+	if (diag->exec() == QDialog::Accepted && !t_address->toPlainText().isEmpty())
 	{
-		bool address_valid;
-		u32 address = t_address->text().toUInt(&address_valid, 16);
-
-		if (address_valid)
+		for (const auto& address_text : t_address->toPlainText().split("\n"))
 		{
-			bs_t<breakpoint_type> bp_t;
-			switch(co_bptype->currentIndex())
+			bool address_valid;
+			u32 address = address_text.toUInt(&address_valid, 16);
+			if (address_valid)
 			{
-			case 0:
-				bp_t = breakpoint_type::bp_mread + breakpoint_type::bp_mwrite;
-				break;
-			case 1:
-				bp_t = breakpoint_type::bp_mread;
-				break;
-			case 2:
-				bp_t = breakpoint_type::bp_mwrite;
-				break;
-			case 3:
-				bp_t = breakpoint_type::bp_execute;
-				break;
-			default:
-				bp_t = {};
-				break;
-			}
+				bs_t<breakpoint_type> bp_t;
+				switch(co_bptype->currentIndex())
+				{
+				case 0:
+					bp_t = breakpoint_type::bp_mread + breakpoint_type::bp_mwrite;
+					break;
+				case 1:
+					bp_t = breakpoint_type::bp_mread;
+					break;
+				case 2:
+					bp_t = breakpoint_type::bp_mwrite;
+					break;
+				case 3:
+					bp_t = breakpoint_type::bp_execute;
+					break;
+				default:
+					bp_t = {};
+					break;
+				}
 
-			if (bp_t) AddBreakpoint(address, bp_t);
+				if (bp_t) AddBreakpoint(address, bp_t);
+			}
 		}
 	}
 
