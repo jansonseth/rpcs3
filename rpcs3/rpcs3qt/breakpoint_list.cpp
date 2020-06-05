@@ -158,11 +158,10 @@ void breakpoint_list::OnBreakpointListRightClicked(const QPoint &pos)
 
 void breakpoint_list::OnBreakpointListDelete()
 {
-	int selectedCount = selectedItems().count();
-
-	for (int i = selectedCount - 1; i >= 0; i--)
+	auto sel = selectedItems();
+	for (auto it = sel.rbegin(); it != sel.rend(); ++it)
 	{
-		RemoveBreakpoint(item(i)->data(Qt::UserRole).value<u32>());
+		RemoveBreakpoint((*it)->data(Qt::UserRole).value<u32>());
 	}
 }
 
@@ -188,7 +187,7 @@ void breakpoint_list::ShowAddBreakpointWindow()
 	QHBoxLayout *hbox_bot = new QHBoxLayout();
 	QComboBox *co_bptype = new QComboBox(this);
 	QStringList breakpoint_types;
-	breakpoint_types << "Memory Read" << "Memory Write" << "Memory Read&Write" << "Execution";
+	breakpoint_types << "Memory Read&Write" << "Memory Read" << "Memory Write" << "Execution";
 	co_bptype->addItems(breakpoint_types);
 
 	hbox_bot->addWidget(co_bptype);
@@ -210,22 +209,25 @@ void breakpoint_list::ShowAddBreakpointWindow()
 
 	diag->move(QCursor::pos());
 
-	if (diag->exec() == QDialog::Accepted)
+	
+	if (diag->exec() == QDialog::Accepted && !t_address->text().isEmpty())
 	{
-		if (!t_address->text().isEmpty())
+		bool address_valid;
+		u32 address = t_address->text().toUInt(&address_valid, 16);
+
+		if (address_valid)
 		{
-			u32 address = std::stoul(t_address->text().toStdString(), nullptr, 16);
 			bs_t<breakpoint_type> bp_t;
 			switch(co_bptype->currentIndex())
 			{
 			case 0:
-				bp_t = breakpoint_type::bp_mread;
+				bp_t = breakpoint_type::bp_mread + breakpoint_type::bp_mwrite;
 				break;
 			case 1:
-				bp_t = breakpoint_type::bp_mwrite;
+				bp_t = breakpoint_type::bp_mread;
 				break;
 			case 2:
-				bp_t = breakpoint_type::bp_mread + breakpoint_type::bp_mwrite;
+				bp_t = breakpoint_type::bp_mwrite;
 				break;
 			case 3:
 				bp_t = breakpoint_type::bp_execute;

@@ -12,6 +12,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
+#include <sstream>
 
 #if !defined(_MSC_VER) && defined(__clang__)
 #pragma GCC diagnostic push
@@ -30,15 +31,33 @@ void ppubreak(const char *ins, breakpoint_type t, u64 addr, T val, ppu_thread& p
 	if (!g_breakpoint_handler->HasBreakpoint(vm::cast(addr, HERE), t, sizeof(T)))
 		return;
 
-	auto retaddr = ppu.dump_callstack_list()[0];
-
-	if (t == breakpoint_type::bp_mwrite)
-		ppu_log.error("BPMW: %s breakpoint writing 0x%x at 0x%x lr=0x%x", ins, val, addr, retaddr);
+	std::stringstream formatted;
+	if constexpr (std::is_floating_point_v<T>)
+	{
+		formatted << val;
+	}
 	else
-		ppu_log.error("BPMR: %s breakpoint reading 0x%x at 0x%x lr=0x%x", ins, val, addr, retaddr);
+	{
+		formatted << "0x" << std::hex;
+		if constexpr (std::is_same_v<T, v128>)
+		{
+			auto val128 = static_cast<v128>(val);
+			formatted << val128._u64[1] << val128._u64[0];
+		}
+		else
+		{
+			formatted << val;
+		}
+	}
+
+	bool writing = t == breakpoint_type::bp_mwrite;
+	ppu_log.always("%s: %s breakpoint %s %s at 0x%x lr=0x%x",
+		(writing ? "BPMW" : "BPMR"), ins, (writing ? "writing" : "reading"), formatted.str().c_str(), addr, ppu.lr);
 
 	if (!g_breakpoint_handler->IsBreakOnBPM())
+	{
 		return;
+	}
 
 	bool status = ppu.state.test_and_set(cpu_flag::dbg_pause);
 	if (!status && ppu.check_state())

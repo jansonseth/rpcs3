@@ -52,6 +52,7 @@ debugger_frame::debugger_frame(std::shared_ptr<gui_settings> settings, QWidget *
 	m_breakpoint_handler = new breakpoint_handler();
 	g_breakpoint_handler = m_breakpoint_handler;
 	m_breakpoint_list = new breakpoint_list(this, m_breakpoint_handler);
+	m_breakpoint_list->setMinimumHeight(100);
 
 	m_debugger_list = new debugger_list(this, settings, m_breakpoint_handler);
 	m_debugger_list->installEventFilter(this);

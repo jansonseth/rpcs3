@@ -1,4 +1,4 @@
-#include "breakpoint_handler.h"
+﻿#include "breakpoint_handler.h"
 
 extern void ppu_breakpoint(u32 loc, bool isAdding);
 
@@ -27,6 +27,10 @@ bool breakpoint_handler::HasBreakpoint(u32 loc, bs_t<breakpoint_type> type, u8 s
 
 bool breakpoint_handler::AddBreakpoint(u32 loc, bs_t<breakpoint_type> type)
 {
+	if (m_breakpoints_list.find(loc) != m_breakpoints_list.end())
+	{
+		return false;
+	}
 	m_breakpoints_list[loc] = type;
 
 	if (type & breakpoint_type::bp_execute)
