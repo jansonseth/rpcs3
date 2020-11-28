@@ -317,6 +317,8 @@
      </property>
      <addaction name="languageAct0"/>
     </widget>
+    <addaction name="updateAct"/>
+    <addaction name="separator"/>
     <addaction name="languageMenu"/>
     <addaction name="separator"/>
     <addaction name="aboutAct"/>
