@@ -1458,7 +1458,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 
 		SubscribeTooltip(ui->cb_show_pup_install, tooltips.settings.show_pup_install);
 
-		SubscribeTooltip(ui->cb_check_update_start, tooltips.settings.check_update_start);
+		//SubscribeTooltip(ui->cb_check_update_start, tooltips.settings.check_update_start);
 
 		SubscribeTooltip(ui->useRichPresence, tooltips.settings.use_rich_presence);
 
@@ -1537,7 +1537,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		ui->cb_show_pkg_install->setChecked(m_gui_settings->GetValue(gui::ib_pkg_success).toBool());
 		ui->cb_show_pup_install->setChecked(m_gui_settings->GetValue(gui::ib_pup_success).toBool());
 
-		ui->cb_check_update_start->setChecked(m_gui_settings->GetValue(gui::m_check_upd_start).toBool());
+		//ui->cb_check_update_start->setChecked(m_gui_settings->GetValue(gui::m_check_upd_start).toBool());
 
 		const bool enable_ui_colors = m_gui_settings->GetValue(gui::m_enableUIColors).toBool();
 		ui->cb_custom_colors->setChecked(enable_ui_colors);
@@ -1612,10 +1612,12 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 		{
 			m_gui_settings->SetValue(gui::ib_pup_success, val);
 		});
+		/*
 		connect(ui->cb_check_update_start, &QCheckBox::clicked, [=, this](bool val)
 		{
 			m_gui_settings->SetValue(gui::m_check_upd_start, val);
 		});
+		*/
 
 		connect(ui->cb_custom_colors, &QCheckBox::clicked, [=, this](bool val)
 		{

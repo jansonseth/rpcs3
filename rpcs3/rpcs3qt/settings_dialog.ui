@@ -3129,13 +3129,6 @@
                </widget>
               </item>
               <item>
-               <widget class="QCheckBox" name="cb_check_update_start">
-                <property name="text">
-                 <string>Check for updates on startup</string>
-                </property>
-               </widget>
-              </item>
-              <item>
                <spacer name="guiTabSpacerRight">
                 <property name="orientation">
                  <enum>Qt::Vertical</enum>
